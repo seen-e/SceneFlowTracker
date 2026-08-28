@@ -1,0 +1,143 @@
+# SceneFlowTracker 主配置
+# 只放运行时最常改的内容：数据入口、视角、吞吐量、输出格式、模型路径。
+# 采样阈值和轨迹过滤阈值放在单独配置文件中，见 algorithm_configs。
+
+input:
+  # 输入 episodes.json。必须是 JSON 数组，每个元素是一个 episode。
+  manifest_path: /mnt/data/chachaxu/save/abc_130k_v3/abc_130k_v3_train.json
+
+  # 本次只处理一个视角。框架只读取 episode["video_segments"][view_key]。
+  # 可选示例：observation.images.top / observation.images.left_wrist / observation.images.right_wrist
+  view_key: observation.images.top
+
+  # 全框架固定使用左闭右开：[start_frame, end_frame)。一般不要改。
+  frame_range_semantics: half_open
+
+  # true：manifest 有缺字段或 frame_count 不一致时直接报错。
+  # false：跳过坏 episode，适合先扫脏数据。
+  strict_validation: true
+
+video:
+  # manifest：使用 video_segments 中记录的 fps。
+  # fixed：强制使用 fixed_fps，并在和 manifest 不一致时 warning。
+  fps_mode: manifest
+
+  # fps_mode=fixed 时生效。常见 ABC 视频为 30.0。
+  fixed_fps: 30.0
+
+  # 每个 segment 的帧数。15 帧在 30fps 下等价于 0.5s；30 帧等价于 1s。
+  segment_frames: 15
+
+  # keep：保留最后不足 segment_frames 的尾段。
+  # drop：丢弃不足 segment_frames 的尾段。
+  tail_policy: keep
+
+models:
+  yolo:
+    # YOLO 机械臂 bbox 模型路径。每个 segment 第一帧只跑一次。
+    model_path: /mnt/workspace/instance_exp/yolo_detect/arm_detect/runs/yolo11n_arm_abc130k_v3_train_vlm_9_1_640_20260826/weights/best.pt
+
+    # YOLO 置信度阈值。漏检多就降低，误检多就升高。
+    confidence_threshold: 0.15
+
+  cotracker:
+    # CoTracker 源码目录，会加入 PYTHONPATH。
+    source_root: /mnt/data/chachaxu/instance_tracking_environment/co-tracker
+
+    # CoTracker checkpoint 路径。
+    model_path: /mnt/data/chachaxu/model/cotracker3/scaled_offline.pth
+
+    # CoTracker offline window。通常保持 60。
+    window_len: 60
+
+    # 一个 segment 内 query 点的推理 batch size。显存不足时调小。
+    point_batch_size: 200
+
+workers:
+  # 视频解码 worker 数，只负责 seek/decode，不加载模型。
+  decode_workers: 4
+
+  # 模型 worker 数，每个 worker 会加载一份 YOLO + CoTracker。
+  model_workers: 1
+
+  # 模型 worker 设备。单卡用 cuda:0；CPU debug 可用 cpu。
+  model_devices:
+    - cuda:0
+
+  # 是否允许多个 model worker 共用同一设备。默认 false，避免显存过高。
+  allow_device_sharing: false
+
+queues:
+  # 待解码 segment 队列大小。通常 32~128。
+  segment_job_queue_size: 64
+
+  # 已解码 RGB segment 队列大小。这里最占内存，GPU 慢时建议 8~16。
+  decoded_segment_queue_size: 16
+
+  # 模型结果队列大小。通常 32~128。
+  result_queue_size: 64
+
+processing:
+  # 当前版本只做二维稀疏轨迹，不做深度。必须保持 false。
+  depth_enabled: false
+
+legacy_modules:
+  # 旧采样/过滤模块所在目录。框架通过 adapter 复用其中 robot_sampling / tracking。
+  module_root: /mnt/workspace/instance_exp/scen_flow_main_view
+
+algorithm_configs:
+  # 机械臂采样和环境采样的细节参数。一般不用动。
+  sampling: sampling.yaml
+
+  # structured-motion-aware 轨迹过滤细节参数。一般不用动。
+  trajectory_filter: trajectory_filter.yaml
+
+output:
+  # 输出根目录。每个 episode 会写到 output_root/dataset/episode_id/。
+  output_root: /mnt/data/chachaxu/dataset/scene_flow_tracker_outputs
+
+  # 当前 NPZ schema 版本。1.2 表示 LEFT / RIGHT / ENV 三路分组保存。
+  schema_version: "1.2"
+
+  # 是否保存 episode 级 NPZ。
+  save_npz: true
+
+  # 是否保存 episode 级 summary.json。
+  save_summary_json: true
+
+  # NPZ 压缩方式。compressed：np.savez_compressed；stored：np.savez。
+  compression: compressed
+
+  # 是否保存 CoTracker 原始轨迹。
+  save_raw_tracks: true
+
+  # 是否保存平滑后的轨迹。
+  save_smooth_tracks: true
+
+  # 旧兼容字段。建议使用 save_filter_features。
+  save_features: true
+
+  # 是否保存采样阶段的评分、边缘强度、候选等级等字段。
+  save_sampling_features: true
+
+  # 是否保存轨迹过滤的诊断特征。关闭后仍会保存 track_state / motion_state / usable。
+  save_filter_features: true
+
+  # 如果 CoTracker 实际返回 confidence，则写入 *_cotracker_confidence；不会伪造空字段。
+  save_cotracker_confidence: true
+
+  # 是否保存调试可视化。当前批处理框架预留该配置。
+  debug_visualization: false
+
+batch:
+  # true：已完成 episode 自动跳过。完成判断：NPZ 非空且 summary.json 存在。
+  resume: true
+
+  # true：单个 segment 失败后继续处理后续 segment。
+  continue_on_segment_error: true
+
+  # true：按物理 video_path + source_start_frame 排序，减少随机 seek。
+  group_by_physical_video: true
+
+  # true：NPZ 先写 tmp，再原子替换，避免中断留下坏文件。
+  atomic_write: true

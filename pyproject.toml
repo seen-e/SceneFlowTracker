@@ -1,0 +1,10 @@
+[project]
+name = "scene-flow-tracker"
+version = "0.1.0"
+description = "Batch sparse scene trajectory tracking for LeRobot/ABC-130K videos."
+requires-python = ">=3.10"
+dependencies = ["numpy", "opencv-python", "pyyaml", "torch"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

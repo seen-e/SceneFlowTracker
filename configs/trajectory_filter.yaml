@@ -1,0 +1,105 @@
+# 轨迹过滤细节配置
+# 当前使用 structured-motion-aware v2，避免把圆周/旋转等真实运动误判为 jitter。
+
+trajectory_filter:
+  motion_classifier:
+    # v2：当前推荐版本。不要轻易退回旧 path_efficiency 过滤逻辑。
+    version: v2
+
+  tracking_validity:
+    # false：不因为 CoTracker visibility 低直接判 FAILED。
+    # 机械臂遮挡频繁时建议 false。
+    enabled: false
+    min_visibility_ratio: 0.6
+    partial_visibility_ratio: 0.3
+    max_invisible_gap: null
+    confidence:
+      enabled: true
+      min_median_confidence: null
+      min_p10_confidence: null
+
+  jump_filter:
+    # 对异常大跳变做 MAD 鲁棒检测。
+    enabled: true
+    temporal_window: 5
+    mad_multiplier: 4.0
+
+  smoothing:
+    # 轨迹平滑。窗口会根据真实 segment 长度自动裁剪为合法奇数。
+    enabled: true
+    method: savgol
+    window_size: 5
+    window_length: 5
+    polyorder: 2
+
+  normalization:
+    # 使用 bbox 对角线归一化运动幅度。
+    method: bbox_diagonal
+
+  direction_analysis:
+    # 计算方向一致性/翻转时忽略低于该速度的微小位移。
+    min_speed_for_direction: 0.05
+
+  motion_classification:
+    structured_motion:
+      # 平滑结构化运动保护条件。
+      max_jitter_residual_ratio: 0.20
+      min_turn_consistency: 0.60
+      max_turn_angle_mad: 0.45
+      min_path_length_norm: 0.015
+
+    jitter_v2:
+      residual_ratio:
+        enabled: true
+        min_jitter_residual_ratio: 0.35
+      turning:
+        enabled: true
+        min_speed_for_turn_norm: 0.001
+        max_turn_consistency: 0.35
+        min_turn_angle_mad: 0.75
+      jerk:
+        enabled: true
+        min_normalized_jerk: 1.20
+
+      # 至少满足多少类 jitter 证据才判 JITTER。增大更保守。
+      min_evidence_count: 2
+
+    static:
+      # STATIC 判定阈值。
+      max_net_displacement_norm: 0.01
+      max_path_length_norm: 0.02
+      max_jitter_rms_norm: 0.005
+
+    legacy_jitter:
+      # 旧 jitter 统计字段，仅用于 legacy_motion_state 对比。
+      max_net_displacement_norm: 0.04
+      max_path_efficiency: 0.20
+      min_direction_reversal_ratio: 0.40
+      min_axis_sign_flip_ratio: 0.45
+      min_jitter_rms_norm: 0.007
+
+    moving:
+      min_net_displacement_norm: 0.01
+      min_path_efficiency: 0.30
+
+  local_consistency:
+    enabled: true
+    k_neighbors: 6
+    use_for_hard_filter: false
+
+  local_affine:
+    # 更重的局部仿射一致性特征，默认关闭。
+    enabled: false
+    k_neighbors: 8
+    method: partial_affine
+    use_ransac: true
+    max_neighbor_distance_px: null
+    use_for_hard_filter: false
+
+  output_policy:
+    # 当前策略：保留 STATIC / MOVING / UNCERTAIN，过滤 JITTER。
+    keep_static: true
+    keep_moving: true
+    keep_jitter: false
+    keep_uncertain: true
+    keep_partial_tracks: true

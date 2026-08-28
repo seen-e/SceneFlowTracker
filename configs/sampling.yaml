@@ -1,0 +1,109 @@
+# 采样细节配置
+# 一般只在调算法效果时修改。主配置 config.yaml 负责吞吐量和数据格式。
+
+robot_sampling:
+  left_robot:
+    # 左机械臂目标采样点数。实际可能因候选不足而少于该值。
+    target_points: 100
+
+  right_robot:
+    # 右机械臂目标采样点数。
+    target_points: 100
+
+  edge:
+    # 当前旧模块只实现 canny。
+    detector: canny
+
+    # Canny 低/高阈值。低阈值会增加边缘，也更容易引入噪声。
+    threshold1: 50
+    threshold2: 150
+
+    # 小于该像素数的边缘连通域会被过滤。
+    min_component_pixels: 5
+
+    # 是否做形态学 closing。可连接断裂边缘，也可能粘连背景。
+    closing_enabled: false
+    closing_kernel_size: 3
+
+  color:
+    # 是否启用机械臂黑/白颜色先验。
+    enabled: true
+    color_space: lab
+
+    # 颜色先验 patch 尺寸。
+    patch_size: 7
+
+    # LAB 中黑色和白色的 L 通道阈值。
+    black_l_max: 80
+    white_l_min: 175
+
+    # LAB 中 a/b 通道距离中性灰 128 的容差。
+    neutral_ab_tolerance: 28
+
+    # 沿边缘法向两侧采样，用于判断边缘两侧颜色。
+    side_offset_px: 3
+    side_patch_radius: 1
+
+  topology:
+    # 是否启用 bbox 拓扑过滤，降低穿出 bbox 的背景长边缘影响。
+    enabled: true
+    bbox_expand_ratio: 0.05
+    background_outside_ratio: 0.45
+    background_extension_score: 0.35
+    robot_inside_ratio: 0.70
+
+  trackability:
+    # 是否使用 Shi-Tomasi / cornerMinEigenVal 可追踪性评分。
+    enabled: true
+    method: shi_tomasi
+    block_size: 3
+    ksize: 3
+
+  score_weights:
+    # 候选点综合评分权重。调大某项会让该证据更重要。
+    edge: 1.0
+    color: 1.0
+    side_color: 1.0
+    topology: 1.0
+    trackability: 1.0
+
+  spatial_sampling:
+    # 空间均衡采样，避免点集中在一小块边缘。
+    enabled: true
+    grid_rows: 5
+    grid_cols: 5
+    min_point_distance: 5
+    max_points_per_cell: 8
+
+  candidate_policy:
+    # 优先用高置信机械臂候选；不足时可用 ambiguous 补点；通常不允许背景候选。
+    use_robot_candidate: true
+    supplement_with_ambiguous: true
+    use_background_candidate: false
+
+environment_sampling:
+  # 是否采样环境点。
+  enabled: true
+
+  # 环境目标采样点数。实际可能因候选不足而少于该值。
+  target_points: 300
+
+  # 环境采样时，在机械臂 bbox 外额外排除的 margin。
+  robot_exclusion_margin_px: 0
+
+  edge:
+    min_component_pixels: 5
+
+  trackability:
+    enabled: true
+
+  score_weights:
+    edge: 1.0
+    trackability: 1.0
+
+  spatial_sampling:
+    enabled: true
+    grid_rows: 8
+    grid_cols: 8
+    min_point_distance: 6
+    max_points_per_cell: 8
