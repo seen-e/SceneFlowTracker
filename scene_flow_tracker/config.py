@@ -44,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "model_workers": 1,
         "model_devices": ["cuda:0"],
         "allow_device_sharing": False,
+        "gpu_memory_limit_gb": None,
     },
     "queues": {
         "segment_job_queue_size": 64,
@@ -128,6 +129,9 @@ def validate_config(cfg: dict[str, Any]) -> None:
     model_workers = int(cfg["workers"]["model_workers"])
     if len(devices) < model_workers and not cfg["workers"].get("allow_device_sharing", False):
         raise ValueError("model_workers > len(model_devices); enable allow_device_sharing to share devices")
+    gpu_memory_limit_gb = cfg["workers"].get("gpu_memory_limit_gb")
+    if gpu_memory_limit_gb is not None and float(gpu_memory_limit_gb) <= 0:
+        raise ValueError("workers.gpu_memory_limit_gb must be positive or null")
     for key, value in cfg["queues"].items():
         if int(value) <= 0:
             raise ValueError(f"queues.{key} must be > 0")

@@ -34,6 +34,14 @@ def load_model_bundle(cfg: dict, device_name: str) -> ModelBundle:
         device = torch.device("cpu")
     else:
         device = torch.device(device_name)
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+        limit_gb = cfg.get("workers", {}).get("gpu_memory_limit_gb")
+        if limit_gb is not None:
+            total_bytes = torch.cuda.get_device_properties(device).total_memory
+            limit_bytes = float(limit_gb) * 1024**3
+            fraction = max(0.01, min(1.0, limit_bytes / float(total_bytes)))
+            torch.cuda.set_per_process_memory_fraction(fraction, device=device)
     yolo = YOLO(str(cfg["models"]["yolo"]["model_path"]))
     cotracker = CoTrackerPredictor(
         checkpoint=str(cfg["models"]["cotracker"]["model_path"]),

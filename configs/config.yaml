@@ -4,7 +4,7 @@
 
 input:
   # 输入 episodes.json。必须是 JSON 数组，每个元素是一个 episode。
-  manifest_path: /mnt/data/chachaxu/save/abc_130k_v3/abc_130k_v3_train.json
+  manifest_path: /mnt/data/chachaxu/save/abc_130k_v3/abc_130k_v3_train_all_views.json
 
   # 本次只处理一个视角。框架只读取 episode["video_segments"][view_key]。
   # 可选示例：observation.images.top / observation.images.left_wrist / observation.images.right_wrist
@@ -20,13 +20,13 @@ input:
 video:
   # manifest：使用 video_segments 中记录的 fps。
   # fixed：强制使用 fixed_fps，并在和 manifest 不一致时 warning。
-  fps_mode: manifest
+  fps_mode: fixed
 
   # fps_mode=fixed 时生效。常见 ABC 视频为 30.0。
-  fixed_fps: 30.0
+  fixed_fps: 10.0
 
   # 每个 segment 的帧数。15 帧在 30fps 下等价于 0.5s；30 帧等价于 1s。
-  segment_frames: 15
+  segment_frames: 30
 
   # keep：保留最后不足 segment_frames 的尾段。
   # drop：丢弃不足 segment_frames 的尾段。
@@ -50,32 +50,37 @@ models:
     # CoTracker offline window。通常保持 60。
     window_len: 60
 
-    # 一个 segment 内 query 点的推理 batch size。显存不足时调小。
-    point_batch_size: 200
+    # 一个 segment 内 query 点的推理 batch size。两卡并发时调到 160，给单卡 80G 显存限制留余量。
+    point_batch_size: 160
 
 workers:
-  # 视频解码 worker 数，只负责 seek/decode，不加载模型。
-  decode_workers: 4
+  # 视频解码 worker 数，只负责 seek/decode，不加载模型。当前实例 40 核，设置 16 个解码 worker 供两张 GPU 消费。
+  decode_workers: 16
 
-  # 模型 worker 数，每个 worker 会加载一份 YOLO + CoTracker。
-  model_workers: 1
+  # 模型 worker 数，每个 worker 会加载一份 YOLO + CoTracker。当前实例 2 张 H20，每卡 1 个 worker。
+  model_workers: 2
 
-  # 模型 worker 设备。单卡用 cuda:0；CPU debug 可用 cpu。
+  # 模型 worker 设备。每个 model worker 轮流绑定一个设备。
   model_devices:
     - cuda:0
+    - cuda:1
 
-  # 是否允许多个 model worker 共用同一设备。默认 false，避免显存过高。
+  # 是否允许多个 model worker 共用同一设备。这里必须 false，避免单卡加载多份模型超过 80G。
   allow_device_sharing: false
 
+  # 单个模型 worker 的 PyTorch CUDA allocator 显存上限，单位 GiB。
+  # 当前 H20 单卡约 95.6GiB，这里限制为 80GiB，避免单卡显存被打满。
+  gpu_memory_limit_gb: 80
+
 queues:
-  # 待解码 segment 队列大小。通常 32~128。
-  segment_job_queue_size: 64
+  # 待解码 segment 队列大小。两卡并发时略放大，减少 worker 空等。
+  segment_job_queue_size: 128
 
-  # 已解码 RGB segment 队列大小。这里最占内存，GPU 慢时建议 8~16。
-  decoded_segment_queue_size: 16
+  # 已解码 RGB segment 队列大小。控制内存/IO 缓冲，不宜过大。
+  decoded_segment_queue_size: 24
 
-  # 模型结果队列大小。通常 32~128。
-  result_queue_size: 64
+  # 模型结果队列大小。两卡并发时略放大。
+  result_queue_size: 128
 
 processing:
   # 当前版本只做二维稀疏轨迹，不做深度。必须保持 false。
@@ -94,7 +99,7 @@ algorithm_configs:
 
 output:
   # 输出根目录。每个 episode 会写到 output_root/dataset/episode_id/。
-  output_root: /mnt/data/chachaxu/dataset/scene_flow_tracker_outputs
+  output_root: /mnt/data/chachaxu/dataset/abc_130k_v3_sceneflow
 
   # 当前 NPZ schema 版本。1.2 表示 LEFT / RIGHT / ENV 三路分组保存。
   schema_version: "1.2"
