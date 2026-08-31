@@ -50,37 +50,41 @@ models:
     # CoTracker offline window。通常保持 60。
     window_len: 60
 
-    # 一个 segment 内 query 点的推理 batch size。两卡并发时调到 160，给单卡 80G 显存限制留余量。
-    point_batch_size: 160
+    # 一个 segment 内 query 点的推理 batch size。当前每段约 500 点，设为 1024 可避免拆成多次小推理。
+    point_batch_size: 1024
 
 workers:
-  # 视频解码 worker 数，只负责 seek/decode，不加载模型。当前实例 40 核，设置 16 个解码 worker 供两张 GPU 消费。
-  decode_workers: 16
+  # 视频解码 worker 数，只负责 seek/decode，不加载模型。当前实例 40 核，设置 12 个解码 worker，给 24 个模型 worker 留 CPU。
+  decode_workers: 12
 
-  # 模型 worker 数，每个 worker 会加载一份 YOLO + CoTracker。当前实例 2 张 H20，每卡 1 个 worker。
-  model_workers: 2
+  # 模型 worker 数，每个 worker 会加载一份 YOLO + CoTracker。当前实例 2 张 H20，每卡 12 个 worker，提高小 segment 的并发度。
+  model_workers: 24
 
-  # 模型 worker 设备。每个 model worker 轮流绑定一个设备。
+  # 模型 worker 设备。model worker 会按列表轮流绑定设备，因此 24 个 worker 会平均落到两张卡。
   model_devices:
     - cuda:0
     - cuda:1
 
-  # 是否允许多个 model worker 共用同一设备。这里必须 false，避免单卡加载多份模型超过 80G。
-  allow_device_sharing: false
+  # 是否允许多个 model worker 共用同一设备。多 worker 并发需要 true。
+  allow_device_sharing: true
 
   # 单个模型 worker 的 PyTorch CUDA allocator 显存上限，单位 GiB。
-  # 当前 H20 单卡约 95.6GiB，这里限制为 80GiB，避免单卡显存被打满。
-  gpu_memory_limit_gb: 80
+  # 设置为 null 时不使用单 worker 固定上限，而使用下面的单卡总上限自动均分。
+  gpu_memory_limit_gb: null
+
+  # 单张 GPU 上所有 model worker 的总 allocator 上限，单位 GiB。
+  # 当前每卡 12 个 worker，所以每个 worker 会自动限制为约 6.67GiB，总量不超过 80GiB。
+  gpu_memory_limit_per_device_gb: 80
 
 queues:
-  # 待解码 segment 队列大小。两卡并发时略放大，减少 worker 空等。
-  segment_job_queue_size: 128
+  # 待解码 segment 队列大小。多 worker 并发时放大，减少模型 worker 空等。
+  segment_job_queue_size: 256
 
-  # 已解码 RGB segment 队列大小。控制内存/IO 缓冲，不宜过大。
-  decoded_segment_queue_size: 24
+  # 已解码 RGB segment 队列大小。提高到 128 给 24 个模型 worker 留足缓冲。
+  decoded_segment_queue_size: 128
 
-  # 模型结果队列大小。两卡并发时略放大。
-  result_queue_size: 128
+  # 模型结果队列大小。多 worker 并发时放大。
+  result_queue_size: 256
 
 processing:
   # 当前版本只做二维稀疏轨迹，不做深度。必须保持 false。

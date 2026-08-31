@@ -19,6 +19,22 @@ class ModelBundle:
     filter_fn: Any
 
 
+def _canonical_device_name(name: str) -> str:
+    return str(torch.device(name))
+
+
+def _assigned_worker_count_for_device(cfg: dict, device_name: str) -> int:
+    devices = list(cfg.get("workers", {}).get("model_devices") or ["cpu"])
+    model_workers = int(cfg.get("workers", {}).get("model_workers", 1))
+    target = _canonical_device_name(device_name)
+    count = 0
+    for worker_id in range(model_workers):
+        assigned = _canonical_device_name(str(devices[worker_id % len(devices)]))
+        if assigned == target:
+            count += 1
+    return max(1, count)
+
+
 def load_model_bundle(cfg: dict, device_name: str) -> ModelBundle:
     legacy_root = Path(cfg["legacy_modules"]["module_root"])
     cot_root = Path(cfg["models"]["cotracker"]["source_root"])
@@ -36,7 +52,14 @@ def load_model_bundle(cfg: dict, device_name: str) -> ModelBundle:
         device = torch.device(device_name)
     if device.type == "cuda":
         torch.cuda.set_device(device)
-        limit_gb = cfg.get("workers", {}).get("gpu_memory_limit_gb")
+        workers_cfg = cfg.get("workers", {})
+        per_device_limit_gb = workers_cfg.get("gpu_memory_limit_per_device_gb")
+        per_worker_limit_gb = workers_cfg.get("gpu_memory_limit_gb")
+        if per_device_limit_gb is not None:
+            workers_on_device = _assigned_worker_count_for_device(cfg, str(device))
+            limit_gb = float(per_device_limit_gb) / workers_on_device
+        else:
+            limit_gb = per_worker_limit_gb
         if limit_gb is not None:
             total_bytes = torch.cuda.get_device_properties(device).total_memory
             limit_bytes = float(limit_gb) * 1024**3
