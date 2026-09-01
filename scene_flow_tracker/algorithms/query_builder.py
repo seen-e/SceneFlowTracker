@@ -54,11 +54,50 @@ def remove_existing(points: np.ndarray, existing: Iterable[tuple[int, int]]) -> 
     return np.asarray(keep, dtype=np.float32).reshape(-1, 2)
 
 
-def build_query_set(left: np.ndarray, right: np.ndarray, env: np.ndarray, total_query_points: int, image_width: int, image_height: int) -> tuple[np.ndarray, np.ndarray, QueryLayout]:
+def _fill_missing_env(env: np.ndarray, used: set[tuple[int, int]], missing: int, image_width: int, image_height: int, seed: int) -> np.ndarray:
+    if missing <= 0:
+        return env.astype(np.float32).reshape(-1, 2)
+    xs = np.arange(int(image_width), dtype=np.int32)
+    ys = np.arange(int(image_height), dtype=np.int32)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    all_points = np.stack([grid_x.reshape(-1), grid_y.reshape(-1)], axis=1)
+    rng = np.random.default_rng(seed)
+    order = np.arange(len(all_points))
+    rng.shuffle(order)
+    extra = []
+    for idx in order:
+        x, y = int(all_points[idx, 0]), int(all_points[idx, 1])
+        key = (x, y)
+        if key in used:
+            continue
+        extra.append([x, y])
+        used.add(key)
+        if len(extra) >= missing:
+            break
+    if len(extra) < missing:
+        raise ValueError(f"not enough image pixels to fill query points: missing={missing} filled={len(extra)}")
+    return np.concatenate([env, np.asarray(extra, dtype=np.float32)], axis=0).astype(np.float32)
+
+
+def build_query_set(
+    left: np.ndarray,
+    right: np.ndarray,
+    env: np.ndarray,
+    total_query_points: int,
+    image_width: int,
+    image_height: int,
+    *,
+    fill_missing: bool = False,
+    fill_seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray, QueryLayout]:
     left = _unique_rows(np.asarray(left, dtype=np.float32).reshape(-1, 2))
     right = remove_existing(np.asarray(right, dtype=np.float32).reshape(-1, 2), [(int(round(x)), int(round(y))) for x, y in left])
     used = [(int(round(x)), int(round(y))) for x, y in np.concatenate([left, right], axis=0)] if len(left) + len(right) else []
     env = remove_existing(np.asarray(env, dtype=np.float32).reshape(-1, 2), used)
+    if fill_missing:
+        used_set = {(int(round(x)), int(round(y))) for x, y in np.concatenate([left, right, env], axis=0)} if len(left) + len(right) + len(env) else set()
+        missing = int(total_query_points) - int(len(left)) - int(len(right)) - int(len(env))
+        env = _fill_missing_env(env, used_set, missing, image_width, image_height, fill_seed)
     query_xy = np.concatenate([left, right, env], axis=0).astype(np.float32)
     if len(query_xy) != int(total_query_points):
         raise ValueError(f"query count mismatch: expected={total_query_points} got={len(query_xy)}")

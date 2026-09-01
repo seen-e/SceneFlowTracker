@@ -26,30 +26,45 @@ def _spatial_pick(points: np.ndarray, scores: np.ndarray, target: int, image_sha
     cols = max(1, int(cfg.get("grid_cols", 5)))
     min_dist = float(cfg.get("min_point_distance", 5))
     max_per_cell = max(1, int(cfg.get("max_points_per_cell", max(1, target))))
+    max_candidates = int(cfg.get("max_candidate_points", max(5000, target * 30)))
+    if len(points) > max_candidates:
+        top_idx = np.argpartition(-scores, max_candidates - 1)[:max_candidates]
+        points = points[top_idx]
+        scores = scores[top_idx]
     order = np.argsort(-scores, kind="mergesort")
-    picked: list[np.ndarray] = []
+    picked_arr = np.empty((int(target), 2), dtype=np.float32)
+    picked_count = 0
     per_cell: dict[tuple[int, int], int] = {}
     for idx in order:
         p = points[idx]
         c = min(cols - 1, max(0, int(p[0] / max(1, w) * cols)))
         r = min(rows - 1, max(0, int(p[1] / max(1, h) * rows)))
         key = (r, c)
-        if per_cell.get(key, 0) >= max_per_cell and len(picked) < target:
+        if per_cell.get(key, 0) >= max_per_cell and picked_count < target:
             continue
-        if picked and min(np.linalg.norm(p - q) for q in picked) < min_dist:
-            continue
-        picked.append(p)
+        if picked_count:
+            dist2 = np.sum((picked_arr[:picked_count] - p) ** 2, axis=1)
+            if np.any(dist2 < min_dist * min_dist):
+                continue
+        picked_arr[picked_count] = p
+        picked_count += 1
         per_cell[key] = per_cell.get(key, 0) + 1
-        if len(picked) >= target:
+        if picked_count >= target:
             break
-    if len(picked) < target:
-        remaining = [points[idx] for idx in order if not any(np.allclose(points[idx], q) for q in picked)]
-        rng.shuffle(remaining)
-        for p in remaining:
-            picked.append(p)
-            if len(picked) >= target:
+    if picked_count < target:
+        used = {(int(round(float(q[0]))), int(round(float(q[1])))) for q in picked_arr[:picked_count]}
+        remaining = [points[idx] for idx in order if (int(round(float(points[idx][0]))), int(round(float(points[idx][1])))) not in used]
+        if remaining:
+            remaining_arr = np.asarray(remaining, dtype=np.float32)
+            rng.shuffle(remaining_arr)
+        else:
+            remaining_arr = np.empty((0, 2), np.float32)
+        for p in remaining_arr:
+            picked_arr[picked_count] = p
+            picked_count += 1
+            if picked_count >= target:
                 break
-    return np.asarray(picked, dtype=np.float32).reshape(-1, 2)
+    return picked_arr[:picked_count].copy()
 
 
 def sample_robot_points(image_rgb: np.ndarray, bbox_xyxy: np.ndarray | None, target: int, cfg: dict, seed: int = 0) -> dict:

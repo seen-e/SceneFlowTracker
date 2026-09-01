@@ -11,6 +11,20 @@ from ..data.types import CoTrackerBatch, TrackResult
 from ..utils.shared_arrays import attach_shared_array, release_shared_array
 
 
+def patch_cotracker_batch_view(source_root: str | None) -> None:
+    if not source_root:
+        return
+    target = Path(source_root) / "cotracker" / "models" / "core" / "cotracker" / "cotracker3_offline.py"
+    if not target.exists():
+        return
+    text = target.read_text(encoding="utf-8")
+    old = "coords_init = coords.view(B * T, N, 2)"
+    new = "coords_init = coords.reshape(B * T, N, 2)"
+    if old not in text or new in text:
+        return
+    target.write_text(text.replace(old, new), encoding="utf-8")
+
+
 def normalize_cotracker_output(pred_tracks: Any, pred_visibility: Any, batch_size: int, num_points: int) -> tuple[np.ndarray, np.ndarray]:
     tracks = pred_tracks.detach().cpu().numpy() if hasattr(pred_tracks, "detach") else np.asarray(pred_tracks)
     vis = pred_visibility.detach().cpu().numpy() if hasattr(pred_visibility, "detach") else np.asarray(pred_visibility)
@@ -36,6 +50,7 @@ class CoTrackerModel:
         ccfg = cfg["models"]["cotracker"]
         source_root = ccfg.get("source_root")
         if source_root:
+            patch_cotracker_batch_view(str(source_root))
             src = str(Path(source_root))
             if src not in sys.path:
                 sys.path.insert(0, src)

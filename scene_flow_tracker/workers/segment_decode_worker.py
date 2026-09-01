@@ -14,7 +14,8 @@ from ..video_decode import decode_frames_rgb
 
 
 def decode_segment_rgb(job) -> np.ndarray:
-    return decode_frames_rgb(job.physical_video_path, job.source_start_frame, job.frame_count)
+    fps = job.manifest_fps or job.effective_fps
+    return decode_frames_rgb(job.physical_video_path, job.source_start_frame, job.frame_count, fps=fps)
 
 
 def segment_decode_worker(worker_id: int, input_queue: Queue, output_queue: Queue, final_queue: Queue, log_level: int = logging.INFO) -> None:

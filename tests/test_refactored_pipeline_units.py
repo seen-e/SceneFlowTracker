@@ -1,6 +1,7 @@
 import numpy as np
 
 from scene_flow_tracker.algorithms.query_allocator import allocate_initial_queries, final_environment_target
+from scene_flow_tracker.algorithms.query_builder import build_query_set
 from scene_flow_tracker.data.types import DecodedTrackItem, SharedArrayRef, TrackResult, YoloDetectionResult
 from scene_flow_tracker.inference.cotracker_model import normalize_cotracker_output
 from scene_flow_tracker.inference.yolo_model import assign_arm_slots
@@ -109,6 +110,17 @@ def test_sampling_keeps_fixed_total_query_count_when_only_one_bbox(tmp_path):
     assert result.left_count + result.right_count + result.env_count == 30
     assert result.left_count <= 10
     assert result.right_count == 0
+
+
+def test_query_builder_can_fill_missing_environment_points():
+    left = np.array([[1, 1], [2, 2]], np.float32)
+    right = np.array([[5, 5]], np.float32)
+    env = np.array([[1, 1], [3, 3]], np.float32)
+    query_xy, query_group, _layout = build_query_set(left, right, env, 8, 10, 10, fill_missing=True, fill_seed=7)
+    assert query_xy.shape == (8, 2)
+    assert np.count_nonzero(query_group == 0) == 2
+    assert np.count_nonzero(query_group == 1) == 1
+    assert np.count_nonzero(query_group == 2) == 5
 
 
 def test_cotracker_output_normalization_accepts_btn_and_bnt_layouts():

@@ -12,7 +12,8 @@ from ..video_decode import decode_first_frame_rgb
 
 
 def decode_first_frame(job: SegmentJob):
-    return decode_first_frame_rgb(job.physical_video_path, job.source_start_frame)
+    fps = job.manifest_fps or job.effective_fps
+    return decode_first_frame_rgb(job.physical_video_path, job.source_start_frame, fps=fps)
 
 
 def first_frame_decode_worker(worker_id: int, input_queue: Queue, output_queue: Queue, final_queue: Queue, log_level: int = logging.INFO) -> None:

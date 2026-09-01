@@ -28,22 +28,22 @@ def probe_video_size(path: str) -> tuple[int, int]:
     return int(stream["width"]), int(stream["height"])
 
 
-def decode_frames_ffmpeg(path: str, start_frame: int, frame_count: int) -> np.ndarray:
+def decode_frames_ffmpeg(path: str, start_frame: int, frame_count: int, fps: float | None = None) -> np.ndarray:
     if frame_count <= 0:
         raise ValueError("frame_count must be > 0")
     width, height = probe_video_size(path)
-    end_frame = int(start_frame) + int(frame_count) - 1
-    vf = f"select='between(n\\,{int(start_frame)}\\,{end_frame})',setpts=N/FRAME_RATE/TB"
     cmd = [
         "ffmpeg",
         "-v",
         "error",
+    ]
+    if fps is not None and float(fps) > 0:
+        cmd += ["-ss", f"{int(start_frame) / float(fps):.9f}"]
+    cmd += [
         "-i",
         path,
-        "-vf",
-        vf,
-        "-vsync",
-        "0",
+        "-frames:v",
+        str(int(frame_count)),
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -75,12 +75,12 @@ def decode_frames_cv2(path: str, start_frame: int, frame_count: int) -> np.ndarr
     return np.stack(frames, axis=0).astype(np.uint8)
 
 
-def decode_frames_rgb(path: str, start_frame: int, frame_count: int) -> np.ndarray:
+def decode_frames_rgb(path: str, start_frame: int, frame_count: int, fps: float | None = None) -> np.ndarray:
     try:
-        return decode_frames_ffmpeg(path, start_frame, frame_count)
+        return decode_frames_ffmpeg(path, start_frame, frame_count, fps=fps)
     except Exception:
         return decode_frames_cv2(path, start_frame, frame_count)
 
 
-def decode_first_frame_rgb(path: str, frame_index: int) -> np.ndarray:
-    return decode_frames_rgb(path, frame_index, 1)[0]
+def decode_first_frame_rgb(path: str, frame_index: int, fps: float | None = None) -> np.ndarray:
+    return decode_frames_rgb(path, frame_index, 1, fps=fps)[0]

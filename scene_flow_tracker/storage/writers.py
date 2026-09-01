@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -576,13 +577,21 @@ def write_episode_outputs(output_root: Path, episode: EpisodeJob, results: list[
     if errors:
         raise ValueError("NPZ payload validation failed: " + "; ".join(errors))
     npz_path = output_npz_path(output_root, episode)
-    tmp = npz_path.with_suffix(".npz.tmp")
+    tmp = npz_path.with_suffix(".tmp.npz")
     compression = ((cfg or {}).get("output", {}) if cfg else {}).get("compression", "compressed")
-    with tmp.open("wb") as f:
+    local_tmp = tempfile.NamedTemporaryFile(prefix="sft_episode_", suffix=".npz", delete=False)
+    local_tmp.close()
+    try:
         if compression == "stored":
-            np.savez(f, **payload)
+            np.savez(local_tmp.name, **payload)
         else:
-            np.savez_compressed(f, **payload)
+            np.savez_compressed(local_tmp.name, **payload)
+        shutil.copyfile(local_tmp.name, tmp)
+    finally:
+        try:
+            Path(local_tmp.name).unlink()
+        except FileNotFoundError:
+            pass
     if atomic:
         os.replace(tmp, npz_path)
     else:

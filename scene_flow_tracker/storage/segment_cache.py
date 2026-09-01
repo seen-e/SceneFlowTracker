@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -84,9 +85,17 @@ def write_segment_cache(path: Path, result: SegmentResult, fingerprint: str, ato
         for key, value in group.items():
             if isinstance(value, np.ndarray):
                 payload[prefix + key] = value
-    tmp = path.with_suffix(".npz.tmp")
-    with tmp.open("wb") as f:
-        np.savez_compressed(f, **payload)
+    tmp = path.with_suffix(".tmp.npz")
+    local_tmp = tempfile.NamedTemporaryFile(prefix="sft_segment_cache_", suffix=".npz", delete=False)
+    local_tmp.close()
+    try:
+        np.savez_compressed(local_tmp.name, **payload)
+        shutil.copyfile(local_tmp.name, tmp)
+    finally:
+        try:
+            Path(local_tmp.name).unlink()
+        except FileNotFoundError:
+            pass
     if atomic:
         os.replace(tmp, path)
     else:

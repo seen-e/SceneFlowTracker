@@ -42,7 +42,16 @@ def sample_queries(det: YoloDetectionResult, cfg: dict) -> SamplingResult:
     env_target = final_environment_target(total, len(left_pts), len(right_pts))
     exclude = np.concatenate([left_pts, right_pts], axis=0) if len(left_pts) + len(right_pts) else None
     env = sample_environment_points(det.first_frame_rgb, _valid_bboxes(det), env_target, env_cfg, seed=seed + 37, exclude_points=exclude)
-    query_xy, query_group, _layout = build_query_set(left_pts, right_pts, env["points_xy"], total, det.image_width, det.image_height)
+    query_xy, query_group, _layout = build_query_set(
+        left_pts,
+        right_pts,
+        env["points_xy"],
+        total,
+        det.image_width,
+        det.image_height,
+        fill_missing=True,
+        fill_seed=seed + 101,
+    )
     timings = dict(det.timings)
     timings["sampling_time_sec"] = time.perf_counter() - started
     return SamplingResult(
