@@ -1,6 +1,14 @@
 # 采样细节配置
 # 一般只在调算法效果时修改。主配置 config.yaml 负责吞吐量和数据格式。
 
+sampling:
+  query_allocation:
+    # 每个 segment 固定 query 点总数；主 config.yaml 中可覆盖。
+    total_query_points: 300
+
+    # 每个成功检测到的机械臂 bbox 的目标点数；缺额转给环境点。
+    points_per_detected_arm: 100
+
 robot_sampling:
   left_robot:
     # 左机械臂目标采样点数。实际可能因候选不足而少于该值。

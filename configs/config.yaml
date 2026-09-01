@@ -1,152 +1,180 @@
 # SceneFlowTracker 主配置
-# 只放运行时最常改的内容：数据入口、视角、吞吐量、输出格式、模型路径。
-# 采样阈值和轨迹过滤阈值放在单独配置文件中，见 algorithm_configs。
+# 这里主要放数据入口、指定视角、吞吐量、模型路径、缓存和输出格式。
+# 采样/过滤阈值细节放在 configs/sampling.yaml 与 configs/trajectory_filter.yaml。
 
 input:
-  # 输入 episodes.json。必须是 JSON 数组，每个元素是一个 episode。
+  # ABC/LeRobot manifest 路径。必须是 JSON 数组，每条记录包含 video_segments。
   manifest_path: /mnt/data/chachaxu/save/abc_130k_v3/abc_130k_v3_train_all_views.json
 
-  # 本次只处理一个视角。框架只读取 episode["video_segments"][view_key]。
-  # 可选示例：observation.images.top / observation.images.left_wrist / observation.images.right_wrist
+  # 本次只处理一个视角；框架只读取 episode["video_segments"][view_key]。
+  # 例如：observation.images.top / observation.images.left_wrist / observation.images.right_wrist。
   view_key: observation.images.top
 
-  # 全框架固定使用左闭右开：[start_frame, end_frame)。一般不要改。
+  # 帧区间语义，固定为左闭右开 [start_frame, end_frame)。
   frame_range_semantics: half_open
 
-  # true：manifest 有缺字段或 frame_count 不一致时直接报错。
-  # false：跳过坏 episode，适合先扫脏数据。
+  # true：manifest 缺字段或帧数不一致时立即报错；false：跳过坏记录。
   strict_validation: true
 
 video:
-  # manifest：使用 video_segments 中记录的 fps。
-  # fixed：强制使用 fixed_fps，并在和 manifest 不一致时 warning。
-  fps_mode: fixed
+  # manifest：使用 manifest 内 fps；fixed：使用 fixed_fps 覆盖。
+  fps_mode: manifest
 
-  # fps_mode=fixed 时生效。常见 ABC 视频为 30.0。
+  # fps_mode=fixed 时生效。若想按 30fps 处理，设为 30.0。
   fixed_fps: 10.0
 
-  # 每个 segment 的帧数。15 帧在 30fps 下等价于 0.5s；30 帧等价于 1s。
+  # 每个 segment 的帧数。30 表示 30fps 下 1 秒；15 表示 0.5 秒。
   segment_frames: 30
 
-  # keep：保留最后不足 segment_frames 的尾段。
-  # drop：丢弃不足 segment_frames 的尾段。
+  # keep：保留最后不足 segment_frames 的尾段，并单独 CoTracker 推理；drop：丢弃尾段。
   tail_policy: keep
+
+workers:
+  # 首帧解码并发数；只读取每个 segment 第一帧，供 YOLO 和采样使用。
+  first_frame_decode_workers: 8
+
+  # 采样并发数；负责根据 YOLO bbox/边缘/可追踪性生成固定数量 query。
+  sampling_workers: 8
+
+  # 完整 segment 解码并发数；采样完成后才读取整段视频，减少无效内存占用。
+  segment_decode_workers: 4
+
+  # 轨迹后处理过滤并发数；负责 static/moving/jitter/usable 标记。
+  filter_workers: 8
+
+pipeline:
+  # 单次在内存中推进的最大 segment 数。调大可提高吞吐，但会增加 CPU 内存和共享内存占用。
+  max_inflight_segments: 64
 
 models:
   yolo:
-    # YOLO 机械臂 bbox 模型路径。每个 segment 第一帧只跑一次。
+    # 机械臂 bbox YOLO 权重。
     model_path: /mnt/workspace/instance_exp/yolo_detect/arm_detect/runs/yolo11n_arm_abc130k_v3_train_vlm_9_1_640_20260826/weights/best.pt
 
+    # YOLO 所在设备。建议双卡时 YOLO 放 cuda:0，CoTracker 放 cuda:1。
+    device: cuda:0
+
+    # YOLO 首帧 batch size。越大首帧检测吞吐越高，显存也更高。
+    batch_size: 32
+
+    # YOLO 输入分辨率。
+    imgsz: 640
+
     # YOLO 置信度阈值。漏检多就降低，误检多就升高。
-    confidence_threshold: 0.15
+    conf: 0.25
+
+    # YOLO NMS IoU 阈值。
+    iou: 0.7
 
   cotracker:
-    # CoTracker 源码目录，会加入 PYTHONPATH。
+    # CoTracker 官方源码目录，会加入 PYTHONPATH；不是业务采样/过滤代码。
     source_root: /mnt/data/chachaxu/instance_tracking_environment/co-tracker
 
-    # CoTracker checkpoint 路径。
+    # CoTracker checkpoint。
     model_path: /mnt/data/chachaxu/model/cotracker3/scaled_offline.pth
 
-    # CoTracker offline window。通常保持 60。
-    window_len: 60
+    # CoTracker 所在设备。显存主要消耗在这里。
+    device: cuda:1
 
-    # 一个 segment 内 query 点的推理 batch size。当前每段约 500 点，设为 1024 可避免拆成多次小推理。
-    point_batch_size: 1024
+    # segment 维度 batch size。正常 segment 会按 (T,H,W,N) 堆成 batch；尾段单独处理。
+    segment_batch_size: 4
 
-workers:
-  # 视频解码 worker 数，只负责 seek/decode，不加载模型。当前实例 40 核，设置 12 个解码 worker，给 24 个模型 worker 留 CPU。
-  decode_workers: 12
+    # query 点维度 chunk size。只在单段点数过多时拆点，不代表 segment batch。
+    point_chunk_size: 1024
 
-  # 模型 worker 数，每个 worker 会加载一份 YOLO + CoTracker。当前实例 2 张 H20，每卡 12 个 worker，提高小 segment 的并发度。
-  model_workers: 24
+sampling:
+  # 采样随机种子；同一 episode/segment 会派生稳定 seed。
+  seed: 0
 
-  # 模型 worker 设备。model worker 会按列表轮流绑定设备，因此 24 个 worker 会平均落到两张卡。
-  model_devices:
-    - cuda:0
-    - cuda:1
+  query_allocation:
+    # 每个 segment 固定 query 点总数。无论 YOLO 检出 0/1/2 个 bbox，最终都必须等于该值。
+    total_query_points: 300
 
-  # 是否允许多个 model worker 共用同一设备。多 worker 并发需要 true。
-  allow_device_sharing: true
+    # 每个成功检测到的机械臂 bbox 的目标点数；bbox 缺失或候选不足时缺额自动转给环境点。
+    points_per_detected_arm: 100
 
-  # 单个模型 worker 的 PyTorch CUDA allocator 显存上限，单位 GiB。
-  # 设置为 null 时不使用单 worker 固定上限，而使用下面的单卡总上限自动均分。
-  gpu_memory_limit_gb: null
+cache:
+  # 是否开启 segment 级缓存。开启后断点续跑可以跳过已完成 segment。
+  enabled: true
 
-  # 单张 GPU 上所有 model worker 的总 allocator 上限，单位 GiB。
-  # 当前每卡 12 个 worker，所以每个 worker 会自动限制为约 6.67GiB，总量不超过 80GiB。
-  gpu_memory_limit_per_device_gb: 80
+  # 每个 episode 输出目录下的缓存子目录名。
+  dirname: .segment_cache
+
+  # episode NPZ 成功合并并通过内部校验后，是否删除 segment cache。
+  delete_after_successful_merge: true
+
+  # true：如果缓存里记录的是 FAILED segment，会重新跑；false：复用该失败记录。
+  retry_cached_failed_segments: false
 
 queues:
-  # 待解码 segment 队列大小。多 worker 并发时放大，减少模型 worker 空等。
-  segment_job_queue_size: 256
-
-  # 已解码 RGB segment 队列大小。提高到 128 给 24 个模型 worker 留足缓冲。
-  decoded_segment_queue_size: 128
-
-  # 模型结果队列大小。多 worker 并发时放大。
-  result_queue_size: 256
+  # 下面队列大小用于正式进程拓扑预留；当前 runner 会读取并校验，便于后续切回常驻进程队列。
+  segment_job_queue_size: 128
+  first_frame_queue_size: 64
+  yolo_batch_queue_size: 4
+  yolo_result_queue_size: 64
+  sampling_result_queue_size: 32
+  decoded_track_queue_size: 8
+  cotracker_batch_queue_size: 2
+  track_result_queue_size: 16
+  filtered_result_queue_size: 32
 
 processing:
-  # 当前版本只做二维稀疏轨迹，不做深度。必须保持 false。
+  # 当前版本只做 RGB 稀疏二维轨迹，不做深度场景流。
   depth_enabled: false
 
-legacy_modules:
-  # 旧采样/过滤模块所在目录。框架通过 adapter 复用其中 robot_sampling / tracking。
-  module_root: /mnt/workspace/instance_exp/scen_flow_main_view
-
 algorithm_configs:
-  # 机械臂采样和环境采样的细节参数。一般不用动。
+  # 采样细节配置，包括机械臂/环境边缘采样、颜色先验和空间均衡参数。
   sampling: sampling.yaml
 
-  # structured-motion-aware 轨迹过滤细节参数。一般不用动。
+  # 轨迹过滤细节配置，包括 static/moving/jitter/usable 规则。
   trajectory_filter: trajectory_filter.yaml
 
 output:
-  # 输出根目录。每个 episode 会写到 output_root/dataset/episode_id/。
+  # 输出根目录。每个结果写到 output_root/dataset/episode_id/。
   output_root: /mnt/data/chachaxu/dataset/abc_130k_v3_sceneflow
 
-  # 当前 NPZ schema 版本。1.2 表示 LEFT / RIGHT / ENV 三路分组保存。
+  # 当前 NPZ schema 版本。不要随意修改，读写器按 1.2 校验。
   schema_version: "1.2"
 
-  # 是否保存 episode 级 NPZ。
+  # true：保存 episode 级 NPZ。
   save_npz: true
 
-  # 是否保存 episode 级 summary.json。
+  # true：保存 episode 级 summary.json。
   save_summary_json: true
 
-  # NPZ 压缩方式。compressed：np.savez_compressed；stored：np.savez。
+  # compressed：np.savez_compressed；stored：np.savez。
   compression: compressed
 
-  # 是否保存 CoTracker 原始轨迹。
+  # true：保存 CoTracker 原始轨迹。
   save_raw_tracks: true
 
-  # 是否保存平滑后的轨迹。
+  # true：保存平滑后的轨迹。
   save_smooth_tracks: true
 
-  # 旧兼容字段。建议使用 save_filter_features。
+  # 兼容字段；建议保持 true。
   save_features: true
 
-  # 是否保存采样阶段的评分、边缘强度、候选等级等字段。
+  # true：保存采样评分、边缘强度、trackability 等特征。
   save_sampling_features: true
 
-  # 是否保存轨迹过滤的诊断特征。关闭后仍会保存 track_state / motion_state / usable。
+  # true：保存轨迹过滤诊断特征。
   save_filter_features: true
 
-  # 如果 CoTracker 实际返回 confidence，则写入 *_cotracker_confidence；不会伪造空字段。
+  # true：若 CoTracker 返回 confidence，则写入 NPZ。
   save_cotracker_confidence: true
 
-  # 是否保存调试可视化。当前批处理框架预留该配置。
+  # 预留调试开关；批量主流程默认不输出可视化。
   debug_visualization: false
 
 batch:
-  # true：已完成 episode 自动跳过。完成判断：NPZ 非空且 summary.json 存在。
+  # true：扫描 output_root 中已完成 NPZ/summary，并跳过完成 episode。
   resume: true
 
-  # true：单个 segment 失败后继续处理后续 segment。
+  # true：某个 segment 失败时仍写 FAILED 记录并继续后续 segment。
   continue_on_segment_error: true
 
-  # true：按物理 video_path + source_start_frame 排序，减少随机 seek。
+  # true：manifest job 按物理视频路径排序，减少随机 seek。
   group_by_physical_video: true
 
-  # true：NPZ 先写 tmp，再原子替换，避免中断留下坏文件。
+  # true：NPZ 和 summary 先写临时文件，再原子替换。
   atomic_write: true

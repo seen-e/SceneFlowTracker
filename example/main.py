@@ -25,8 +25,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--view-key", default=None, help="指定处理视角，例如 observation.images.top。")
     parser.add_argument("--output-root", default=None, help="覆盖输出根目录。")
     parser.add_argument("--segment-frames", type=int, default=None, help="覆盖每个 segment 的帧数。")
-    parser.add_argument("--decode-workers", type=int, default=None, help="覆盖视频解码 worker 数。")
-    parser.add_argument("--model-workers", type=int, default=None, help="覆盖模型 worker 数。")
+    parser.add_argument("--first-frame-decode-workers", type=int, default=None, help="覆盖首帧解码 worker 数。")
+    parser.add_argument("--sampling-workers", type=int, default=None, help="覆盖采样 worker 数。")
+    parser.add_argument("--segment-decode-workers", type=int, default=None, help="覆盖完整 segment 解码 worker 数。")
+    parser.add_argument("--filter-workers", type=int, default=None, help="覆盖轨迹过滤 worker 数。")
+    parser.add_argument("--yolo-batch-size", type=int, default=None, help="覆盖 YOLO 首帧 batch size。")
+    parser.add_argument("--cotracker-segment-batch-size", type=int, default=None, help="覆盖 CoTracker segment batch size。")
+    parser.add_argument("--total-query-points", type=int, default=None, help="覆盖每个 segment 固定 query 点总数。")
+    parser.add_argument("--decode-workers", type=int, default=None, help="兼容旧参数：同时覆盖首帧解码和完整 segment 解码 worker 数。")
+    parser.add_argument("--model-workers", type=int, default=None, help="兼容旧参数：映射为 CoTracker segment batch size。")
     parser.add_argument("--episode-index", type=int, default=None, help="只处理指定 episode_index。")
     parser.add_argument("--max-episodes", type=int, default=None, help="最多处理多少个 episode。")
     parser.add_argument("--segment-id", type=int, default=None, help="只处理指定 segment_id，通常用于 smoke test。")
@@ -45,19 +52,37 @@ def build_config(args: argparse.Namespace) -> dict:
         cfg["output"]["output_root"] = args.output_root
     if args.segment_frames is not None:
         cfg["video"]["segment_frames"] = args.segment_frames
+    if args.first_frame_decode_workers is not None:
+        cfg["workers"]["first_frame_decode_workers"] = args.first_frame_decode_workers
+    if args.sampling_workers is not None:
+        cfg["workers"]["sampling_workers"] = args.sampling_workers
+    if args.segment_decode_workers is not None:
+        cfg["workers"]["segment_decode_workers"] = args.segment_decode_workers
+    if args.filter_workers is not None:
+        cfg["workers"]["filter_workers"] = args.filter_workers
+    if args.yolo_batch_size is not None:
+        cfg["models"]["yolo"]["batch_size"] = args.yolo_batch_size
+    if args.cotracker_segment_batch_size is not None:
+        cfg["models"]["cotracker"]["segment_batch_size"] = args.cotracker_segment_batch_size
+    if args.total_query_points is not None:
+        cfg["sampling"]["query_allocation"]["total_query_points"] = args.total_query_points
     if args.decode_workers is not None:
-        cfg["workers"]["decode_workers"] = args.decode_workers
+        cfg["workers"]["first_frame_decode_workers"] = args.decode_workers
+        cfg["workers"]["segment_decode_workers"] = args.decode_workers
     if args.model_workers is not None:
-        cfg["workers"]["model_workers"] = args.model_workers
+        cfg["models"]["cotracker"]["segment_batch_size"] = args.model_workers
     if args.resume:
         cfg["batch"]["resume"] = True
     if args.no_resume:
         cfg["batch"]["resume"] = False
     if args.debug:
         cfg["output"]["debug_visualization"] = True
-        cfg["workers"]["decode_workers"] = 1
-        cfg["workers"]["model_workers"] = 1
-        cfg["queues"]["decoded_segment_queue_size"] = 2
+        cfg["workers"]["first_frame_decode_workers"] = 1
+        cfg["workers"]["sampling_workers"] = 1
+        cfg["workers"]["segment_decode_workers"] = 1
+        cfg["workers"]["filter_workers"] = 1
+        cfg["models"]["yolo"]["batch_size"] = 1
+        cfg["models"]["cotracker"]["segment_batch_size"] = 1
     validate_config(cfg)
     return cfg
 

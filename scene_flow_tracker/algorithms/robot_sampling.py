@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import cv2
+import numpy as np
+
+from .edges import bbox_mask, edge_map, filter_small_components
+from .trackability import trackability_map
+
+
+def _color_score(image_rgb: np.ndarray) -> np.ndarray:
+    lab = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    l = lab[:, :, 0]
+    a = np.abs(lab[:, :, 1] - 128.0)
+    b = np.abs(lab[:, :, 2] - 128.0)
+    neutral = np.clip(1.0 - (a + b) / 80.0, 0.0, 1.0)
+    black = np.clip((95.0 - l) / 95.0, 0.0, 1.0)
+    white = np.clip((l - 155.0) / 100.0, 0.0, 1.0)
+    return np.maximum(black, white) * neutral
+
+
+def _spatial_pick(points: np.ndarray, scores: np.ndarray, target: int, image_shape: tuple[int, int], cfg: dict, rng: np.random.Generator) -> np.ndarray:
+    if target <= 0 or len(points) == 0:
+        return np.empty((0, 2), np.float32)
+    h, w = image_shape
+    rows = max(1, int(cfg.get("grid_rows", 5)))
+    cols = max(1, int(cfg.get("grid_cols", 5)))
+    min_dist = float(cfg.get("min_point_distance", 5))
+    max_per_cell = max(1, int(cfg.get("max_points_per_cell", max(1, target))))
+    order = np.argsort(-scores, kind="mergesort")
+    picked: list[np.ndarray] = []
+    per_cell: dict[tuple[int, int], int] = {}
+    for idx in order:
+        p = points[idx]
+        c = min(cols - 1, max(0, int(p[0] / max(1, w) * cols)))
+        r = min(rows - 1, max(0, int(p[1] / max(1, h) * rows)))
+        key = (r, c)
+        if per_cell.get(key, 0) >= max_per_cell and len(picked) < target:
+            continue
+        if picked and min(np.linalg.norm(p - q) for q in picked) < min_dist:
+            continue
+        picked.append(p)
+        per_cell[key] = per_cell.get(key, 0) + 1
+        if len(picked) >= target:
+            break
+    if len(picked) < target:
+        remaining = [points[idx] for idx in order if not any(np.allclose(points[idx], q) for q in picked)]
+        rng.shuffle(remaining)
+        for p in remaining:
+            picked.append(p)
+            if len(picked) >= target:
+                break
+    return np.asarray(picked, dtype=np.float32).reshape(-1, 2)
+
+
+def sample_robot_points(image_rgb: np.ndarray, bbox_xyxy: np.ndarray | None, target: int, cfg: dict, seed: int = 0) -> dict:
+    if bbox_xyxy is None or target <= 0:
+        return {"points_xy": np.empty((0, 2), np.float32), "features": {}, "stats": {"target_points": int(target), "final_sampled_count": 0}}
+    h, w = image_rgb.shape[:2]
+    bbox = np.asarray(bbox_xyxy, dtype=np.float32)
+    mask = bbox_mask((h, w), bbox, float(cfg.get("topology", {}).get("bbox_expand_ratio", 0.0)))
+    edges, edge_strength = edge_map(image_rgb, cfg.get("edge", {}))
+    edges = filter_small_components(edges, int(cfg.get("edge", {}).get("min_component_pixels", 5)))
+    track = trackability_map(image_rgb, cfg.get("trackability", {})) if cfg.get("trackability", {}).get("enabled", True) else np.zeros((h, w), np.float32)
+    color = _color_score(image_rgb) if cfg.get("color", {}).get("enabled", True) else np.zeros((h, w), np.float32)
+    candidate = mask & (edges | (track > np.percentile(track, 85)))
+    ys, xs = np.nonzero(candidate)
+    if len(xs) == 0:
+        ys, xs = np.nonzero(mask)
+    points = np.stack([xs, ys], axis=1).astype(np.float32) if len(xs) else np.empty((0, 2), np.float32)
+    score = edge_strength[ys, xs] + track[ys, xs] + color[ys, xs] if len(xs) else np.empty((0,), np.float32)
+    rng = np.random.default_rng(seed)
+    picked = _spatial_pick(points, score, int(target), (h, w), cfg.get("spatial_sampling", {}), rng)
+    pix = np.round(picked).astype(int) if len(picked) else np.empty((0, 2), int)
+    features = {
+        "sampling_score": score[:0].astype(np.float32),
+        "edge_strength": np.empty((0,), np.float32),
+        "trackability_score": np.empty((0,), np.float32),
+        "color_score": np.empty((0,), np.float32),
+        "topology_score": np.empty((0,), np.float32),
+        "candidate_level": np.asarray(["robot_candidate"] * len(picked)),
+    }
+    if len(picked):
+        px, py = pix[:, 0], pix[:, 1]
+        features.update({
+            "edge_strength": edge_strength[py, px].astype(np.float32),
+            "trackability_score": track[py, px].astype(np.float32),
+            "color_score": color[py, px].astype(np.float32),
+            "topology_score": np.ones((len(picked),), np.float32),
+        })
+        features["sampling_score"] = (features["edge_strength"] + features["trackability_score"] + features["color_score"]).astype(np.float32)
+    return {
+        "points_xy": picked,
+        "features": features,
+        "stats": {
+            "target_points": int(target),
+            "final_sampled_count": int(len(picked)),
+            "candidate_count": int(len(points)),
+            "bbox_xyxy": bbox.astype(float).tolist(),
+        },
+    }

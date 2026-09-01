@@ -22,6 +22,7 @@ def load_episode_jobs(cfg: dict[str, Any]) -> tuple[list[EpisodeJob], list[dict[
     records = json.loads(manifest_path.read_text(encoding="utf-8"))
     jobs: list[EpisodeJob] = []
     invalid: list[dict[str, Any]] = []
+    fps_warning_count = 0
     for record in records:
         try:
             seg = _segment_for(record, view_key)
@@ -36,7 +37,9 @@ def load_episode_jobs(cfg: dict[str, Any]) -> tuple[list[EpisodeJob], list[dict[
             if cfg["video"]["fps_mode"] == "fixed":
                 effective_fps = float(cfg["video"]["fixed_fps"])
                 if abs(effective_fps - manifest_fps) > 1e-3:
-                    logging.warning("fixed_fps %.3f differs from manifest_fps %.3f for %s", effective_fps, manifest_fps, record.get("episode_id"))
+                    fps_warning_count += 1
+                    if fps_warning_count <= 20:
+                        logging.warning("fixed_fps %.3f differs from manifest_fps %.3f for %s", effective_fps, manifest_fps, record.get("episode_id"))
             else:
                 effective_fps = manifest_fps
             jobs.append(
@@ -62,6 +65,8 @@ def load_episode_jobs(cfg: dict[str, Any]) -> tuple[list[EpisodeJob], list[dict[
             invalid.append(item)
             if strict:
                 raise
+    if fps_warning_count > 20:
+        logging.warning("fixed_fps differs from manifest_fps for %d more episodes; suppressing repeated warnings", fps_warning_count - 20)
     if cfg["batch"].get("group_by_physical_video", True):
         jobs.sort(key=lambda j: (j.physical_video_path, j.source_start_frame, j.episode_index))
     else:

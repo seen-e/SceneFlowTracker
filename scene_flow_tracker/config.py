@@ -31,30 +31,56 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tail_policy": "keep",
     },
     "models": {
-        "yolo": {"model_path": "", "confidence_threshold": 0.15},
+        "yolo": {
+            "model_path": "",
+            "device": "cuda:0",
+            "batch_size": 32,
+            "imgsz": 640,
+            "conf": 0.25,
+            "iou": 0.7,
+        },
         "cotracker": {
             "source_root": "/mnt/data/chachaxu/instance_tracking_environment/co-tracker",
             "model_path": "",
             "window_len": 60,
-            "point_batch_size": 200,
+            "device": "cuda:1",
+            "segment_batch_size": 4,
+            "point_chunk_size": 1024,
         },
     },
     "workers": {
-        "decode_workers": 4,
-        "model_workers": 1,
-        "model_devices": ["cuda:0"],
-        "allow_device_sharing": False,
-        "gpu_memory_limit_gb": None,
-        "gpu_memory_limit_per_device_gb": None,
+        "first_frame_decode_workers": 8,
+        "sampling_workers": 8,
+        "segment_decode_workers": 4,
+        "filter_workers": 8,
+    },
+    "pipeline": {
+        "max_inflight_segments": 64,
     },
     "queues": {
-        "segment_job_queue_size": 64,
-        "decoded_segment_queue_size": 16,
-        "result_queue_size": 64,
+        "segment_job_queue_size": 128,
+        "first_frame_queue_size": 64,
+        "yolo_batch_queue_size": 4,
+        "yolo_result_queue_size": 64,
+        "sampling_result_queue_size": 32,
+        "decoded_track_queue_size": 8,
+        "cotracker_batch_queue_size": 2,
+        "track_result_queue_size": 16,
+        "filtered_result_queue_size": 32,
     },
     "processing": {"depth_enabled": False},
-    "legacy_modules": {
-        "module_root": "/mnt/workspace/instance_exp/scen_flow_main_view",
+    "sampling": {
+        "seed": 0,
+        "query_allocation": {
+            "total_query_points": 300,
+            "points_per_detected_arm": 100,
+        },
+    },
+    "cache": {
+        "enabled": True,
+        "dirname": ".segment_cache",
+        "delete_after_successful_merge": True,
+        "retry_cached_failed_segments": False,
     },
     "robot_sampling": {},
     "environment_sampling": {"enabled": True, "target_points": 300},
@@ -94,6 +120,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
         data = yaml.safe_load(inc.read_text(encoding="utf-8")) or {}
         if key == "sampling":
             include_payload = deep_update(include_payload, {
+                "sampling": data.get("sampling", {}),
                 "robot_sampling": data.get("robot_sampling", {}),
                 "environment_sampling": data.get("environment_sampling", {}),
             })
@@ -103,8 +130,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
             })
         else:
             include_payload = deep_update(include_payload, {key: data})
-    cfg = deep_update(DEFAULT_CONFIG, payload)
-    cfg = deep_update(cfg, include_payload)
+    cfg = deep_update(DEFAULT_CONFIG, include_payload)
+    cfg = deep_update(cfg, payload)
     cfg["algorithm_configs"] = {k: str(v) for k, v in includes.items()}
     cfg["_config_path"] = str(path)
     return cfg
@@ -122,20 +149,20 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("video.fps_mode must be manifest or fixed")
     if cfg["video"]["tail_policy"] not in {"keep", "drop"}:
         raise ValueError("video.tail_policy must be keep or drop")
-    if int(cfg["workers"]["decode_workers"]) < 1:
-        raise ValueError("workers.decode_workers must be >= 1")
-    if int(cfg["workers"]["model_workers"]) < 1:
-        raise ValueError("workers.model_workers must be >= 1")
-    devices = list(cfg["workers"].get("model_devices") or [])
-    model_workers = int(cfg["workers"]["model_workers"])
-    if len(devices) < model_workers and not cfg["workers"].get("allow_device_sharing", False):
-        raise ValueError("model_workers > len(model_devices); enable allow_device_sharing to share devices")
-    gpu_memory_limit_gb = cfg["workers"].get("gpu_memory_limit_gb")
-    if gpu_memory_limit_gb is not None and float(gpu_memory_limit_gb) <= 0:
-        raise ValueError("workers.gpu_memory_limit_gb must be positive or null")
-    gpu_memory_limit_per_device_gb = cfg["workers"].get("gpu_memory_limit_per_device_gb")
-    if gpu_memory_limit_per_device_gb is not None and float(gpu_memory_limit_per_device_gb) <= 0:
-        raise ValueError("workers.gpu_memory_limit_per_device_gb must be positive or null")
+    for key in ("first_frame_decode_workers", "sampling_workers", "segment_decode_workers", "filter_workers"):
+        if int(cfg["workers"][key]) < 1:
+            raise ValueError(f"workers.{key} must be >= 1")
+    if int((cfg.get("pipeline", {}) or {}).get("max_inflight_segments", 64)) < 1:
+        raise ValueError("pipeline.max_inflight_segments must be >= 1")
+    sampling = (cfg.get("sampling", {}) or {}).get("query_allocation", {})
+    total = int(sampling.get("total_query_points", 0))
+    per_arm = int(sampling.get("points_per_detected_arm", 0))
+    if total <= 0:
+        raise ValueError("sampling.query_allocation.total_query_points must be > 0")
+    if per_arm < 0:
+        raise ValueError("sampling.query_allocation.points_per_detected_arm must be >= 0")
+    if per_arm * 2 > total:
+        raise ValueError("sampling.query_allocation.points_per_detected_arm * 2 must be <= total_query_points")
     for key, value in cfg["queues"].items():
         if int(value) <= 0:
             raise ValueError(f"queues.{key} must be > 0")
@@ -148,5 +175,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
     Path(cfg["output"]["output_root"]).mkdir(parents=True, exist_ok=True)
     if cfg["processing"].get("depth_enabled", False):
         raise ValueError("processing.depth_enabled must remain false in this framework version")
-    if len(devices) > model_workers:
-        logging.warning("More model_devices than model_workers; extra devices will be unused")
+    for deprecated in ("model_workers", "model_devices", "allow_device_sharing", "decode_workers"):
+        if deprecated in cfg["workers"]:
+            logging.warning("workers.%s is deprecated and ignored by the refactored pipeline", deprecated)
+    if "legacy_modules" in cfg:
+        logging.warning("legacy_modules is deprecated and ignored by the refactored pipeline")

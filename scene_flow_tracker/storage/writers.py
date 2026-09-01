@@ -636,3 +636,10 @@ def append_processing_manifest(path: Path, item: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(json_safe(item), ensure_ascii=False) + "\n")
+
+
+def append_processing_manifest_many(path: Path, items: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        for item in items:
+            f.write(json.dumps(json_safe(item), ensure_ascii=False) + "\n")
