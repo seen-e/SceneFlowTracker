@@ -7,6 +7,7 @@ cd "${ROOT_DIR}"
 CONDA_ENV="${CONDA_ENV:-co-tracker}"
 MANIFEST_PATH="${MANIFEST_PATH:-/mnt/data/chachaxu/save/abc_130k_v3/abc_130k_v3_train_all_views.json}"
 VIEW_KEY="${VIEW_KEY:-observation.images.top}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/mnt/data/chachaxu/dataset/abc_130k_v3_sceneflow}"
 
 if command -v conda >/dev/null 2>&1; then
   eval "$(conda shell.bash hook)"
@@ -25,4 +26,5 @@ fi
 python example/main.py \
   --manifest-path "${MANIFEST_PATH}" \
   --view-key "${VIEW_KEY}" \
+  --output-root "${OUTPUT_ROOT}" \
   "$@"
