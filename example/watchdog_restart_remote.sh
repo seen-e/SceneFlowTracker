@@ -8,7 +8,8 @@ MOUNT_CHECK_PATH="${MOUNT_CHECK_PATH:-/mnt/data/chachaxu/dataset}"
 CHECK_INTERVAL_SECONDS="${CHECK_INTERVAL_SECONDS:-60}"
 MOUNT_RECOVERY_TIMEOUT_SECONDS="${MOUNT_RECOVERY_TIMEOUT_SECONDS:-900}"
 MOUNT_CHECK_TIMEOUT_SECONDS="${MOUNT_CHECK_TIMEOUT_SECONDS:-10}"
-KILL_PATTERN="${KILL_PATTERN:-[p]ython}"
+KILL_PATTERN="${KILL_PATTERN:-${ROOT_DIR}/example/main.py|example/main.py --manifest-path}"
+FORCE_KILL_ALL_PYTHON="${FORCE_KILL_ALL_PYTHON:-0}"
 ONCE=0
 
 for arg in "$@"; do
@@ -24,7 +25,8 @@ Environment:
   CHECK_INTERVAL_SECONDS              循环检查间隔，默认 60
   MOUNT_RECOVERY_TIMEOUT_SECONDS      挂载恢复等待时间，默认 900
   MOUNT_CHECK_TIMEOUT_SECONDS         单次挂载检查超时，默认 10
-  KILL_PATTERN                        挂载断开时 pkill -f 的模式，默认 python
+  KILL_PATTERN                        挂载断开时 pkill -f 的模式，默认只杀 SceneFlowTracker Python
+  FORCE_KILL_ALL_PYTHON               设为 1 时执行 pkill -f [p]ython
 USAGE
       exit 0
       ;;
@@ -54,11 +56,22 @@ task_running() {
   [[ -n "$(find_main_pids)" ]]
 }
 
+latest_task_failed() {
+  local latest
+  latest="$(ls -t "${LOG_DIR}"/scene_flow_tracker_*.log 2>/dev/null | head -n 1 || true)"
+  [[ -n "${latest}" ]] || return 1
+  grep -qE "SceneFlowTracker run failed|RuntimeError: worker exited unexpectedly|out of memory|Transport endpoint is not connected" "${latest}"
+}
+
 kill_python_tasks() {
-  log "mount check failed; running: pkill -f ${KILL_PATTERN}"
-  pkill -TERM -f "${KILL_PATTERN}" 2>/dev/null || true
+  local pattern="${KILL_PATTERN}"
+  if [[ "${FORCE_KILL_ALL_PYTHON}" == "1" ]]; then
+    pattern="[p]ython"
+  fi
+  log "mount check failed; running: pkill -f ${pattern}"
+  pkill -TERM -f "${pattern}" 2>/dev/null || true
   sleep 5
-  pkill -KILL -f "${KILL_PATTERN}" 2>/dev/null || true
+  pkill -KILL -f "${pattern}" 2>/dev/null || true
 }
 
 wait_for_mount() {
@@ -105,7 +118,13 @@ check_once() {
   fi
 
   if task_running; then
-    log "mount ok; task running"
+    if latest_task_failed; then
+      log "mount ok; task process exists but latest log is failed; restarting task"
+      kill_python_tasks
+      start_task
+    else
+      log "mount ok; task running"
+    fi
   else
     log "mount ok; task not running; starting task"
     start_task
@@ -117,7 +136,7 @@ if (( ONCE )); then
   exit $?
 fi
 
-log "watchdog started root=${ROOT_DIR} mount=${MOUNT_CHECK_PATH} interval=${CHECK_INTERVAL_SECONDS}s kill_pattern=${KILL_PATTERN}"
+log "watchdog started root=${ROOT_DIR} mount=${MOUNT_CHECK_PATH} interval=${CHECK_INTERVAL_SECONDS}s kill_pattern=${KILL_PATTERN} force_all_python=${FORCE_KILL_ALL_PYTHON}"
 while true; do
   check_once || true
   sleep "${CHECK_INTERVAL_SECONDS}"

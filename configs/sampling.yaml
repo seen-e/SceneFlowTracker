@@ -9,6 +9,23 @@ sampling:
     # 每个成功检测到的机械臂 bbox 的目标点数；缺额转给环境点。
     points_per_detected_arm: 100
 
+  valid_region:
+    # 是否在采样前根据单帧估计视频有效画面区域，排除黑色边框和黑框边界。
+    enabled: true
+
+    # 灰度值小于等于该阈值的像素视为黑边候选。常见黑边用 3-10 即可。
+    black_threshold: 5
+
+    # 某一行/列中非黑像素占比达到该值，才认为这一行/列属于真实画面。
+    min_row_content_fraction: 0.02
+    min_col_content_fraction: 0.02
+
+    # 在估计出的真实画面矩形基础上继续向内收缩，避免采到黑边和画面交界的强边缘。
+    inset_px: 4
+
+    # 估计出的有效区域面积太小时认为检测异常，退回整图，避免误杀。
+    min_area_fraction: 0.25
+
 robot_sampling:
   left_robot:
     # 左机械臂目标采样点数。实际可能因候选不足而少于该值。

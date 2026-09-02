@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from .edges import bbox_mask, edge_map, filter_small_components
+from .edges import bbox_mask, content_region_mask, edge_map, filter_small_components
 from .trackability import trackability_map
 
 
@@ -67,24 +67,59 @@ def _spatial_pick(points: np.ndarray, scores: np.ndarray, target: int, image_sha
     return picked_arr[:picked_count].copy()
 
 
-def sample_robot_points(image_rgb: np.ndarray, bbox_xyxy: np.ndarray | None, target: int, cfg: dict, seed: int = 0) -> dict:
+def sample_robot_points(
+    image_rgb: np.ndarray,
+    bbox_xyxy: np.ndarray | None,
+    target: int,
+    cfg: dict,
+    seed: int = 0,
+    edge_constraint_mask: np.ndarray | None = None,
+) -> dict:
     if bbox_xyxy is None or target <= 0:
         return {"points_xy": np.empty((0, 2), np.float32), "features": {}, "stats": {"target_points": int(target), "final_sampled_count": 0}}
     h, w = image_rgb.shape[:2]
     bbox = np.asarray(bbox_xyxy, dtype=np.float32)
-    mask = bbox_mask((h, w), bbox, float(cfg.get("topology", {}).get("bbox_expand_ratio", 0.0)))
+    valid_region, valid_bbox = content_region_mask(image_rgb, cfg.get("valid_region", {}))
+    mask = bbox_mask((h, w), bbox, float(cfg.get("topology", {}).get("bbox_expand_ratio", 0.0))) & valid_region
     edges, edge_strength = edge_map(image_rgb, cfg.get("edge", {}))
     edges = filter_small_components(edges, int(cfg.get("edge", {}).get("min_component_pixels", 5)))
     track = trackability_map(image_rgb, cfg.get("trackability", {})) if cfg.get("trackability", {}).get("enabled", True) else np.zeros((h, w), np.float32)
     color = _color_score(image_rgb) if cfg.get("color", {}).get("enabled", True) else np.zeros((h, w), np.float32)
-    candidate = mask & (edges | (track > np.percentile(track, 85)))
+    constraint_fallback_level = "none"
+    if edge_constraint_mask is not None:
+        constraint = np.asarray(edge_constraint_mask, dtype=bool)
+        if constraint.shape != (h, w):
+            raise ValueError(f"edge_constraint_mask expects {(h, w)}, got {constraint.shape}")
+        candidate = mask & edges & constraint
+        used_edge_constraint = True
+    else:
+        candidate = mask & (edges | (track > np.percentile(track, 85)))
+        used_edge_constraint = False
     ys, xs = np.nonzero(candidate)
-    if len(xs) == 0:
+    if len(xs) == 0 and not used_edge_constraint:
         ys, xs = np.nonzero(mask)
     points = np.stack([xs, ys], axis=1).astype(np.float32) if len(xs) else np.empty((0, 2), np.float32)
     score = edge_strength[ys, xs] + track[ys, xs] + color[ys, xs] if len(xs) else np.empty((0,), np.float32)
     rng = np.random.default_rng(seed)
     picked = _spatial_pick(points, score, int(target), (h, w), cfg.get("spatial_sampling", {}), rng)
+    if used_edge_constraint and len(picked) < target:
+        used = {(int(round(float(x))), int(round(float(y)))) for x, y in picked}
+        fb_mask = mask & edges
+        ys_fb, xs_fb = np.nonzero(fb_mask)
+        fb_points = np.stack([xs_fb, ys_fb], axis=1).astype(np.float32) if len(xs_fb) else np.empty((0, 2), np.float32)
+        fb_score = (edge_strength[ys_fb, xs_fb] + track[ys_fb, xs_fb] + color[ys_fb, xs_fb]) if len(xs_fb) else np.empty((0,), np.float32)
+        fb = _spatial_pick(fb_points, fb_score.astype(np.float32), int(target) - len(picked), (h, w), cfg.get("spatial_sampling", {}), rng)
+        if len(fb):
+            extras = []
+            for x, y in fb:
+                key = (int(round(float(x))), int(round(float(y))))
+                if key in used:
+                    continue
+                extras.append([x, y])
+                used.add(key)
+            if extras:
+                picked = np.concatenate([picked, np.asarray(extras, dtype=np.float32)], axis=0)
+                constraint_fallback_level = "rgb_edge"
     pix = np.round(picked).astype(int) if len(picked) else np.empty((0, 2), int)
     features = {
         "sampling_score": score[:0].astype(np.float32),
@@ -111,5 +146,8 @@ def sample_robot_points(image_rgb: np.ndarray, bbox_xyxy: np.ndarray | None, tar
             "final_sampled_count": int(len(picked)),
             "candidate_count": int(len(points)),
             "bbox_xyxy": bbox.astype(float).tolist(),
+            "valid_region_bbox_xyxy": [int(v) for v in valid_bbox],
+            "edge_constraint_used": bool(used_edge_constraint),
+            "constraint_fallback_level": constraint_fallback_level,
         },
     }

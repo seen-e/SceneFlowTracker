@@ -6,6 +6,7 @@ from multiprocessing.queues import Queue
 
 import numpy as np
 
+from ..algorithms.depth_edges import depth_edge_for_segment
 from ..algorithms.environment_sampling import sample_environment_points
 from ..algorithms.query_allocator import allocate_initial_queries, final_environment_target
 from ..algorithms.query_builder import build_query_set, stable_seed
@@ -33,15 +34,25 @@ def sample_queries(det: YoloDetectionResult, cfg: dict) -> SamplingResult:
     left_target = allocation["left"]
     right_target = allocation["right"]
     seed = stable_seed(det.job, int((cfg.get("sampling", {}) or {}).get("seed", 0)))
-    robot_cfg = cfg.get("robot_sampling", {}) or {}
-    env_cfg = cfg.get("environment_sampling", {}) or {}
-    left = sample_robot_points(det.first_frame_rgb, det.left_bbox_xyxy, left_target, robot_cfg, seed=seed + 11)
-    right = sample_robot_points(det.first_frame_rgb, det.right_bbox_xyxy, right_target, robot_cfg, seed=seed + 23)
+    valid_region_cfg = dict((cfg.get("sampling", {}) or {}).get("valid_region", {}) or {})
+    if det.job.content_bbox_xyxy is not None:
+        valid_region_cfg["bbox_xyxy"] = [int(v) for v in det.job.content_bbox_xyxy]
+    robot_cfg = dict(cfg.get("robot_sampling", {}) or {})
+    env_cfg = dict(cfg.get("environment_sampling", {}) or {})
+    robot_cfg.setdefault("valid_region", valid_region_cfg)
+    env_cfg.setdefault("valid_region", valid_region_cfg)
+    depth_mask, depth_stats = depth_edge_for_segment(
+        det.job,
+        cfg.get("depth_sampling", {}) or {},
+        (det.image_height, det.image_width),
+    )
+    left = sample_robot_points(det.first_frame_rgb, det.left_bbox_xyxy, left_target, robot_cfg, seed=seed + 11, edge_constraint_mask=depth_mask)
+    right = sample_robot_points(det.first_frame_rgb, det.right_bbox_xyxy, right_target, robot_cfg, seed=seed + 23, edge_constraint_mask=depth_mask)
     left_pts = left["points_xy"]
     right_pts = right["points_xy"]
     env_target = final_environment_target(total, len(left_pts), len(right_pts))
     exclude = np.concatenate([left_pts, right_pts], axis=0) if len(left_pts) + len(right_pts) else None
-    env = sample_environment_points(det.first_frame_rgb, _valid_bboxes(det), env_target, env_cfg, seed=seed + 37, exclude_points=exclude)
+    env = sample_environment_points(det.first_frame_rgb, _valid_bboxes(det), env_target, env_cfg, seed=seed + 37, exclude_points=exclude, edge_constraint_mask=depth_mask)
     query_xy, query_group, _layout = build_query_set(
         left_pts,
         right_pts,
@@ -63,7 +74,7 @@ def sample_queries(det: YoloDetectionResult, cfg: dict) -> SamplingResult:
         right_count=len(right_pts),
         env_count=len(env["points_xy"]),
         sampling_features={"left": left["features"], "right": right["features"], "environment": env["features"]},
-        sampling_stats={"left": left["stats"], "right": right["stats"], "environment": env["stats"], "total_query_points": total},
+        sampling_stats={"left": left["stats"], "right": right["stats"], "environment": env["stats"], "depth_edge": depth_stats, "total_query_points": total},
         timings=timings,
     )
 

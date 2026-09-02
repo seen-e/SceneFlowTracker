@@ -69,6 +69,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "filtered_result_queue_size": 32,
     },
     "processing": {"depth_enabled": False},
+    "depth_sampling": {
+        "enabled": False,
+        "root": "",
+        "fallback_to_rgb_when_missing": True,
+        "gradient_percentile": 85.0,
+        "min_gradient": 0.02,
+        "dilate_px": 1,
+    },
     "sampling": {
         "seed": 0,
         "query_allocation": {

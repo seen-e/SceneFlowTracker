@@ -21,7 +21,7 @@ video:
   fps_mode: manifest
 
   # fps_mode=fixed 时生效。若想按 30fps 处理，设为 30.0。
-  fixed_fps: 10.0
+  fixed_fps: 30.0
 
   # 每个 segment 的帧数。30 表示 30fps 下 1 秒；15 表示 0.5 秒。
   segment_frames: 30
@@ -49,19 +49,19 @@ pipeline:
 models:
   yolo:
     # 机械臂 bbox YOLO 权重。
-    model_path: /mnt/workspace/instance_exp/yolo_detect/arm_detect/runs/yolo11n_arm_abc130k_v3_train_vlm_9_1_640_20260826/weights/best.pt
+    model_path: /mnt/workspace/instance_exp/yolo_detect/arm_detect/runs/yolo26m_arm_abc130k_v3_train_left_right_224-3/weights/best.pt
 
     # YOLO 所在设备。建议双卡时 YOLO 放 cuda:0，CoTracker 放 cuda:1。
     device: cuda:0
 
     # YOLO 首帧 batch size。越大首帧检测吞吐越高，显存也更高。
-    batch_size: 32
+    batch_size: 256
 
     # YOLO 输入分辨率。
-    imgsz: 640
+    imgsz: 224
 
     # YOLO 置信度阈值。漏检多就降低，误检多就升高。
-    conf: 0.25
+    conf: 0.4
 
     # YOLO NMS IoU 阈值。
     iou: 0.7
@@ -77,7 +77,7 @@ models:
     device: cuda:1
 
     # segment 维度 batch size。正常 segment 会按 (T,H,W,N) 堆成 batch；尾段单独处理。
-    segment_batch_size: 4
+    segment_batch_size: 24
 
     # query 点维度 chunk size。只在单段点数过多时拆点，不代表 segment batch。
     point_chunk_size: 1024
@@ -121,6 +121,27 @@ queues:
 processing:
   # 当前版本只做 RGB 稀疏二维轨迹，不做深度场景流。
   depth_enabled: false
+
+depth_sampling:
+  # 是否在采样点候选阶段使用 fps=1 的深度结果做边缘交集约束。
+  # true 时：候选边缘 = RGB 边缘 ∩ depth 边缘 ∩ 有效画面 ROI。
+  enabled: true
+
+  # 深度 NPZ 根目录。期望结构：
+  # root/episode_id/top.npz、root/episode_id/left_wrist.npz、root/episode_id/right_wrist.npz。
+  root: /mnt/data/chachaxu/dataset/abc_130k_train_depth_npz
+
+  # true：如果某个 episode/view 没有深度 NPZ 或读取失败，就退回原来的 RGB 采样。
+  fallback_to_rgb_when_missing: true
+
+  # 深度图边缘阈值。值越高，depth edge 越稀疏；值越低，交集候选越多。
+  gradient_percentile: 85.0
+
+  # 深度归一化后 Sobel 梯度的最小阈值，避免纯噪声成为边缘。
+  min_gradient: 0.02
+
+  # 对 depth edge 膨胀几个像素，提高和 RGB edge 的重叠容忍度。
+  dilate_px: 1
 
 algorithm_configs:
   # 采样细节配置，包括机械臂/环境边缘采样、颜色先验和空间均衡参数。

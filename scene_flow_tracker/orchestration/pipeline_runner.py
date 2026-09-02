@@ -4,9 +4,11 @@ import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from ..algorithms.edges import detect_content_bbox
 from ..config import validate_config
 from ..data.types import CoTrackerBatch, DecodedTrackItem, FilteredSegmentResult, FirstFrameItem, SamplingResult, YoloDetectionResult
 from ..inference.cotracker_model import CoTrackerModel
@@ -31,6 +33,7 @@ from ..workers.sampling_worker import sample_queries
 from ..workers.segment_decode_worker import decode_segment_rgb
 from ..utils.shared_arrays import create_shared_array
 from ..utils.shared_arrays import release_shared_array
+from ..video_decode import decode_first_frame_rgb
 
 
 def _pool_map(
@@ -211,6 +214,26 @@ class PipelineRunner:
         filtered = _pool_map("filter", int(self.cfg["workers"]["filter_workers"]), lambda item: filter_track_result(item, self.cfg), items, fail)
         return [filtered_to_segment_result(item) if isinstance(item, FilteredSegmentResult) else item for item in filtered]
 
+    def _estimate_episode_content_bbox(self, episode: EpisodeJob) -> tuple[int, int, int, int] | None:
+        valid_region_cfg = (self.cfg.get("sampling", {}) or {}).get("valid_region", {}) or {}
+        if not bool(valid_region_cfg.get("enabled", True)):
+            return None
+        try:
+            fps = episode.manifest_fps or episode.effective_fps
+            frame = decode_first_frame_rgb(episode.physical_video_path, episode.source_start_frame, fps=fps)
+            bbox = detect_content_bbox(frame, valid_region_cfg)
+            logging.info("episode=%s content_bbox_xyxy=%s", episode.episode_id, bbox)
+            return bbox
+        except Exception as exc:
+            logging.warning("content bbox estimation failed episode=%s error=%s", episode.episode_id, exc)
+            return None
+
+    def _attach_episode_content_bbox(self, episode: EpisodeJob, segments: list[SegmentJob]) -> list[SegmentJob]:
+        bbox = self._estimate_episode_content_bbox(episode)
+        if bbox is None:
+            return segments
+        return [replace(seg, content_bbox_xyxy=bbox) for seg in segments]
+
     def _process_uncached_segments(self, episode: EpisodeJob, segments: list[SegmentJob]) -> list[SegmentResult]:
         max_inflight = int((self.cfg.get("pipeline", {}) or {}).get("max_inflight_segments", 64))
         all_results: list[SegmentResult] = []
@@ -260,6 +283,7 @@ class PipelineRunner:
         segments = _planned_segments(episode, self.cfg, segment_id)
         if not segments:
             return {"episode_id": episode.episode_id, "status": "NO_SEGMENTS", "segments": 0}
+        segments = self._attach_episode_content_bbox(episode, segments)
         cached, todo = self._load_valid_caches(episode, segments)
         logging.info("episode=%s planned=%d cached=%d todo=%d", episode.episode_id, len(segments), len(cached), len(todo))
         self._process_uncached_segments(episode, todo)

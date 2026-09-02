@@ -39,6 +39,7 @@ class SegmentJob:
     frame_count: int
     manifest_fps: float
     effective_fps: float
+    content_bbox_xyxy: tuple[int, int, int, int] | None = None
 
 
 @dataclass
