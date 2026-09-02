@@ -268,7 +268,7 @@ class PipelineRunner:
             fps = episode.manifest_fps or episode.effective_fps
             frame = decode_first_frame_rgb(episode.physical_video_path, episode.source_start_frame, fps=fps)
             bbox = detect_content_bbox(frame, valid_region_cfg)
-            logging.info("episode=%s content_bbox_xyxy=%s", episode.episode_id, bbox)
+            logging.debug("episode=%s content_bbox_xyxy=%s", episode.episode_id, bbox)
             return bbox
         except Exception as exc:
             logging.warning("content bbox estimation failed episode=%s error=%s", episode.episode_id, exc)
@@ -284,7 +284,7 @@ class PipelineRunner:
         max_inflight = int((self.cfg.get("pipeline", {}) or {}).get("max_inflight_segments", 64))
         all_results: list[SegmentResult] = []
         for chunk in _chunks(segments, max_inflight):
-            logging.info("processing chunk episode=%s segments=%s..%s count=%d", episode.episode_id, chunk[0].segment_id, chunk[-1].segment_id, len(chunk))
+            logging.debug("processing chunk episode=%s segments=%s..%s count=%d", episode.episode_id, chunk[0].segment_id, chunk[-1].segment_id, len(chunk))
             first_frames, failed = self._process_first_frames(chunk)
             results = list(failed)
             yolo = self._process_yolo(first_frames) if first_frames else []
@@ -331,7 +331,7 @@ class PipelineRunner:
             return {"episode_id": episode.episode_id, "status": "NO_SEGMENTS", "segments": 0}
         segments = self._attach_episode_content_bbox(episode, segments)
         cached, todo = self._load_valid_caches(episode, segments)
-        logging.info("episode=%s planned=%d cached=%d todo=%d", episode.episode_id, len(segments), len(cached), len(todo))
+        logging.debug("episode=%s planned=%d cached=%d todo=%d", episode.episode_id, len(segments), len(cached), len(todo))
         self._process_uncached_segments(episode, todo)
         merged: list[SegmentResult] = []
         for seg in segments:
@@ -393,18 +393,87 @@ def run(cfg: dict[str, Any], episode_index: int | None = None, max_episodes: int
         return {"episodes_processed": 0, "segments_processed": 0, "invalid_manifest_items": len(invalid)}
     runner = PipelineRunner(cfg)
     summaries: list[dict[str, Any]] = []
-    for ep in episodes:
-        summaries.append(runner.run_episode(ep, segment_id=segment_id))
+    episode_elapsed_total = 0.0
+    episodes_succeeded = 0
+    episodes_failed = 0
+    processed_segments_so_far = 0
+    failed_segments_so_far = 0
+    continue_on_error = bool(cfg["batch"].get("continue_on_segment_error", True))
+    logging.info(
+        "batch start episodes=%d resume_skipped=%d segments=%d output=%s",
+        len(episodes),
+        len(skipped),
+        total_segments,
+        output_root,
+    )
+    for idx, ep in enumerate(episodes, start=1):
+        ep_started = time.perf_counter()
+        try:
+            summary = runner.run_episode(ep, segment_id=segment_id)
+        except Exception as exc:
+            if not continue_on_error:
+                raise
+            planned_count = len(_planned_segments(ep, cfg, segment_id))
+            summary = {
+                "episode_id": ep.episode_id,
+                "episode_index": ep.episode_index,
+                "status": "FAILED",
+                "segment_count": planned_count,
+                "segments_failed": planned_count,
+                "error_code": type(exc).__name__,
+                "error_message": str(exc),
+            }
+            append_processing_manifest(
+                manifest_path,
+                {
+                    "dataset": ep.dataset,
+                    "episode_id": ep.episode_id,
+                    "episode_index": ep.episode_index,
+                    "view": ep.view_key,
+                    "status": "FAILED",
+                    "error_code": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            logging.error("episode failed episode=%s error=%s: %s", ep.episode_id, type(exc).__name__, exc)
+        summaries.append(summary)
+        ep_elapsed = time.perf_counter() - ep_started
+        episode_elapsed_total += ep_elapsed
+        segment_failures = int(summary.get("segments_failed", 0))
+        segment_count = int(summary.get("segment_count", 0))
+        processed_segments_so_far += segment_count
+        failed_segments_so_far += segment_failures
+        if segment_failures > 0:
+            episodes_failed += 1
+        else:
+            episodes_succeeded += 1
+        avg_episode_elapsed = episode_elapsed_total / idx
+        elapsed_so_far = time.perf_counter() - started
+        logging.info(
+            "episode progress processed=%d/%d success=%d failed=%d avg_episode=%.2fs last_episode=%.2fs segments=%d failed_segments=%d segments_per_sec=%.3f episode=%s",
+            idx,
+            len(episodes),
+            episodes_succeeded,
+            episodes_failed,
+            avg_episode_elapsed,
+            ep_elapsed,
+            processed_segments_so_far,
+            failed_segments_so_far,
+            processed_segments_so_far / max(1e-6, elapsed_so_far),
+            ep.episode_id,
+        )
     elapsed = time.perf_counter() - started
     segments_failed = sum(int(s.get("segments_failed", 0)) for s in summaries)
     perf = {
         "pipeline": "refactored_batch_stages",
         "episodes_processed": len(episodes),
-        "episodes_failed": sum(1 for s in summaries if int(s.get("segments_failed", 0)) > 0),
+        "episodes_succeeded": episodes_succeeded,
+        "episodes_failed": episodes_failed,
         "segments_processed": total_segments - segments_failed,
         "segments_failed": segments_failed,
         "invalid_manifest_items": len(invalid),
         "resume_skipped_episodes": len(skipped),
+        "average_episode_time": episode_elapsed_total / max(1, len(summaries)),
         "average_first_frame_decode_time": runner.avg("first_frame_decode_time_sec"),
         "average_yolo_time": runner.avg("yolo_time_sec"),
         "average_sampling_time": runner.avg("sampling_time_sec"),
