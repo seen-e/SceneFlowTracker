@@ -66,7 +66,7 @@ models:
     imgsz: 224
 
     # YOLO 置信度阈值。漏检多就降低，误检多就升高。
-    conf: 0.4
+    conf: 0.1
 
     # YOLO NMS IoU 阈值。
     iou: 0.7
