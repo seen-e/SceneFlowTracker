@@ -35,8 +35,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "models": {
         "yolo": {
             "model_path": "",
-            "device": "cuda:0",
-            "devices": None,
+            "devices": [0],
             "worker_count": 1,
             "batch_size": 32,
             "imgsz": 640,
@@ -47,8 +46,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "source_root": "/mnt/data/chachaxu/instance_tracking_environment/co-tracker",
             "model_path": "",
             "window_len": 60,
-            "device": "cuda:1",
-            "devices": None,
+            "devices": [1],
             "worker_count": 1,
             "segment_batch_size": 4,
             "point_chunk_size": 1024,
@@ -177,8 +175,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("sampling.query_allocation.points_per_detected_arm must be >= 0")
     if per_arm * 2 > total:
         raise ValueError("sampling.query_allocation.points_per_detected_arm * 2 must be <= total_query_points")
-    validate_model_parallel_config("yolo", cfg["models"]["yolo"], "cuda:0")
-    validate_model_parallel_config("cotracker", cfg["models"]["cotracker"], "cuda:0")
+    validate_model_parallel_config("yolo", cfg["models"]["yolo"])
+    validate_model_parallel_config("cotracker", cfg["models"]["cotracker"])
     for key, value in cfg["queues"].items():
         if int(value) <= 0:
             raise ValueError(f"queues.{key} must be > 0")

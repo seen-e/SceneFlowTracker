@@ -101,14 +101,14 @@ class PipelineRunner:
 
     def _get_yolo_workers(self) -> list[YoloModel]:
         if self.yolo_models is None:
-            devices = expanded_worker_devices(self.cfg["models"]["yolo"], "cuda:0")
+            devices = expanded_worker_devices(self.cfg["models"]["yolo"])
             logging.info("loading %d YOLO worker(s) on devices=%s", len(devices), devices)
             self.yolo_models = [YoloModel(self.cfg, device=device, worker_id=idx) for idx, device in enumerate(devices)]
         return self.yolo_models
 
     def _get_cotracker_workers(self) -> list[CoTrackerModel]:
         if self.cotracker_models is None:
-            devices = expanded_worker_devices(self.cfg["models"]["cotracker"], "cuda:0")
+            devices = expanded_worker_devices(self.cfg["models"]["cotracker"])
             logging.info("loading %d CoTracker worker(s) on devices=%s", len(devices), devices)
             self.cotracker_models = [CoTrackerModel(self.cfg, device=device, worker_id=idx) for idx, device in enumerate(devices)]
         return self.cotracker_models

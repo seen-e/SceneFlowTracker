@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from ..data.types import CoTrackerBatch, TrackResult
+from ..model_parallel import configured_devices
 from ..utils.shared_arrays import attach_shared_array, release_shared_array
 
 
@@ -57,7 +58,7 @@ class CoTrackerModel:
         from cotracker.predictor import CoTrackerPredictor
 
         self.torch = torch
-        self.device = self._resolve_device(str(device or ccfg.get("device", "cuda:0")))
+        self.device = self._resolve_device(str(device or configured_devices(ccfg)[0]))
         self.worker_id = int(worker_id)
         self.point_chunk_size = int(ccfg.get("point_chunk_size", ccfg.get("point_batch_size", 1024)))
         self.model = CoTrackerPredictor(checkpoint=str(ccfg["model_path"])).to(self.device)

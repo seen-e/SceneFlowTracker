@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from ..data.types import FirstFrameItem, YoloDetectionResult
+from ..model_parallel import configured_devices
 
 
 def _as_xyxy(value: Any, width: int, height: int) -> np.ndarray:
@@ -77,7 +78,7 @@ class YoloModel:
 
         ycfg = cfg["models"]["yolo"]
         self.model = YOLO(str(ycfg["model_path"]))
-        self.device = str(device or ycfg.get("device", "cuda:0"))
+        self.device = str(device or configured_devices(ycfg)[0])
         self.worker_id = int(worker_id)
         self.imgsz = int(ycfg.get("imgsz", 640))
         self.conf = float(ycfg.get("conf", ycfg.get("confidence_threshold", 0.25)))
