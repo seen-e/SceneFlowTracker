@@ -61,6 +61,10 @@ bash example/run.sh \
   --segment-decode-workers 4 \
   --filter-workers 8 \
   --yolo-batch-size 256 \
+  --yolo-worker-count 1 \
+  --yolo-devices cuda:0 \
+  --cotracker-worker-count 2 \
+  --cotracker-devices cuda:0,cuda:1 \
   --cotracker-segment-batch-size 24
 ```
 
@@ -78,7 +82,11 @@ bash example/run.sh \
 | `--segment-decode-workers` | 覆盖完整 segment 解码并发数。 |
 | `--filter-workers` | 覆盖轨迹过滤并发数。 |
 | `--yolo-batch-size` | 覆盖 YOLO 首帧 batch size。 |
+| `--yolo-worker-count` | 覆盖 YOLO 模型 worker 数量。必须能被 YOLO GPU 数量整除。 |
+| `--yolo-devices` | 覆盖 YOLO GPU 列表，逗号分隔，例如 `cuda:0,cuda:1`。 |
 | `--cotracker-segment-batch-size` | 覆盖 CoTracker segment batch size。 |
+| `--cotracker-worker-count` | 覆盖 CoTracker 模型 worker 数量。必须能被 CoTracker GPU 数量整除。 |
+| `--cotracker-devices` | 覆盖 CoTracker GPU 列表，逗号分隔，例如 `cuda:0,cuda:1`。 |
 | `--total-query-points` | 覆盖每个 segment 的固定 query 点总数。 |
 | `--episode-index` | 只处理指定 `episode_index`。 |
 | `--max-episodes` | 从筛选后的列表中最多处理多少个 episode。 |
@@ -164,7 +172,15 @@ workers:
 | `segment_decode_workers` | 完整 segment 解码并发数。采样成功后才读取整段视频，避免无效内存占用。 |
 | `filter_workers` | 轨迹过滤并发数。负责平滑、运动状态分类、jitter 过滤和 usable 标记。 |
 
-这些 worker 是 CPU 侧并发。YOLO 和 CoTracker 的 GPU batch size 分别由 `models.yolo.batch_size` 和 `models.cotracker.segment_batch_size` 控制，可以和 worker 数不同。
+这些 worker 是 CPU 侧并发。YOLO 和 CoTracker 还有独立的模型 worker 配置，分别由 `models.yolo.worker_count` 和 `models.cotracker.worker_count` 控制。模型 worker 会均匀轮转分配到对应的 `devices` 列表上，并且框架要求 `worker_count % len(devices) == 0`，避免某张 GPU 分到更多模型实例。
+
+每个模型 worker 内部仍然保持原来的两阶段结构：
+
+```text
+prepare batch -> model inference
+```
+
+也就是说，框架先按 `batch_size` 或 `segment_batch_size` 准备 batch，再把 batch 分配给不同模型 worker 推理。多 worker 只改变吞吐和显存占用，不改变采样点、bbox、CoTracker 输入或过滤规则。
 
 ### 3.4 pipeline
 
@@ -186,6 +202,8 @@ models:
   yolo:
     model_path: /mnt/workspace/instance_exp/yolo_detect/arm_detect/runs/yolo11n_arm_abc130k_v3_train_vlm_9_1_640_20260826/weights/best.pt
     device: cuda:0
+    devices: [cuda:0]
+    worker_count: 1
     batch_size: 256
     imgsz: 224
     conf: 0.5
@@ -195,8 +213,10 @@ models:
 | 参数 | 说明 |
 | --- | --- |
 | `model_path` | 机械臂 bbox YOLO 权重路径。 |
-| `device` | YOLO 推理设备。双卡时通常可放在 `cuda:0`。 |
-| `batch_size` | YOLO 首帧 batch size。输入是多个 segment 起始帧。 |
+| `device` | 兼容旧字段。未设置 `devices` 时使用该设备。 |
+| `devices` | YOLO 模型 worker 可用 GPU 列表。worker 会按列表轮转分配。 |
+| `worker_count` | YOLO 模型实例数量。必须能被 `len(devices)` 整除。 |
+| `batch_size` | 每个 YOLO worker 的首帧 batch size。输入是多个 segment 起始帧。 |
 | `imgsz` | YOLO 输入尺寸。当前默认 224。 |
 | `conf` | 置信度阈值。低于该阈值的候选框会被 YOLO 结果过滤掉。漏检多时可降低，误检多时可升高。 |
 | `iou` | NMS IoU 阈值。多个框重叠过高时，用该阈值控制去重。 |
@@ -220,6 +240,8 @@ models:
     source_root: /mnt/data/chachaxu/instance_tracking_environment/co-tracker
     model_path: /mnt/data/chachaxu/model/cotracker3/scaled_offline.pth
     device: cuda:1
+    devices: [cuda:1]
+    worker_count: 1
     segment_batch_size: 24
     point_chunk_size: 1024
 ```
@@ -228,13 +250,15 @@ models:
 | --- | --- |
 | `source_root` | CoTracker 官方源码目录，运行时加入 `PYTHONPATH`。 |
 | `model_path` | CoTracker checkpoint。 |
-| `device` | CoTracker 推理设备。显存主要消耗来自这里。 |
-| `segment_batch_size` | segment 维度 batch size。相同 `T/H/W/N` 的 segment 会拼成 `[B,T,C,H,W]` 一次推理。 |
+| `device` | 兼容旧字段。未设置 `devices` 时使用该设备。 |
+| `devices` | CoTracker 模型 worker 可用 GPU 列表。worker 会按列表轮转分配。 |
+| `worker_count` | CoTracker 模型实例数量。必须能被 `len(devices)` 整除。每个 worker 都会加载一份权重。 |
+| `segment_batch_size` | 每个 CoTracker worker 的 segment 维度 batch size。相同 `T/H/W/N` 的 segment 会拼成 `[B,T,C,H,W]` 一次推理。 |
 | `point_chunk_size` | 点维度 chunk size。单个 segment query 点特别多时按点拆分，避免一次送入过多点。 |
 
 `segment_batch_size` 和 `point_chunk_size` 是两个维度：
 
-- `segment_batch_size` 控制一次推理几个视频片段。
+- `segment_batch_size` 控制每个 CoTracker worker 一次推理几个视频片段。
 - `point_chunk_size` 控制每个片段的点数是否拆 chunk。
 
 当前 query 格式为 `[t, x, y]`，所有点都在 segment 起始帧采样，所以 `t=0`。

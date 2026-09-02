@@ -94,8 +94,10 @@ bash example/kill.sh
 - `input.view_key`：本次处理的单个视角。
 - `video.segment_frames`：每个 segment 的帧数。
 - `workers.*`：CPU 解码、采样、过滤并发数。
-- `models.yolo.batch_size`：YOLO 首帧 batch size。
-- `models.cotracker.segment_batch_size`：CoTracker 的 segment 维度 batch size。
+- `models.yolo.devices / worker_count`：YOLO 模型 worker 的 GPU 分配与实例数量。
+- `models.yolo.batch_size`：每个 YOLO worker 的首帧 batch size。
+- `models.cotracker.devices / worker_count`：CoTracker 模型 worker 的 GPU 分配与实例数量。
+- `models.cotracker.segment_batch_size`：每个 CoTracker worker 的 segment 维度 batch size。
 - `models.cotracker.point_chunk_size`：CoTracker 的 query 点维度 chunk size。
 - `sampling.query_allocation.total_query_points`：每段固定 query 总数。
 - `cache.*`：segment 级缓存与断点续跑策略。

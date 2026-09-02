@@ -52,9 +52,18 @@ models:
     model_path: /mnt/workspace/instance_exp/yolo_detect/arm_detect/runs/yolo26m_arm_abc130k_v3_train_left_right_224-3/weights/best.pt
 
     # YOLO 所在设备。建议双卡时 YOLO 放 cuda:0，CoTracker 放 cuda:1。
+    # 兼容旧字段：如果 devices 没写，就使用这里。
     device: cuda:0
 
+    # YOLO 可用 GPU 列表。worker_count 会按该列表轮转分配。
+    # 例如双卡开 4 个 YOLO worker：devices: [cuda:0, cuda:1]，worker_count: 4。
+    devices: [cuda:0]
+
+    # YOLO 模型实例数量。必须能被 len(devices) 整除，保证每张 GPU 分到相同数量 worker。
+    worker_count: 1
+
     # YOLO 首帧 batch size。越大首帧检测吞吐越高，显存也更高。
+    # 这是每个 YOLO worker 的 batch size，不是所有 worker 的总 batch。
     batch_size: 256
 
     # YOLO 输入分辨率。
@@ -74,9 +83,19 @@ models:
     model_path: /mnt/data/chachaxu/model/cotracker3/scaled_offline.pth
 
     # CoTracker 所在设备。显存主要消耗在这里。
+    # 兼容旧字段：如果 devices 没写，就使用这里。
     device: cuda:1
 
+    # CoTracker 可用 GPU 列表。worker_count 会按该列表轮转分配。
+    # 例如双卡开 6 个 CoTracker worker：devices: [cuda:0, cuda:1]，worker_count: 6。
+    devices: [cuda:1]
+
+    # CoTracker 模型实例数量。必须能被 len(devices) 整除。
+    # 每个 worker 都会加载一份 CoTracker 权重，显存消耗约等于单 worker 显存乘以 worker 数。
+    worker_count: 1
+
     # segment 维度 batch size。正常 segment 会按 (T,H,W,N) 堆成 batch；尾段单独处理。
+    # 这是每个 CoTracker worker 的 segment batch size，不是所有 worker 的总 batch。
     segment_batch_size: 24
 
     # query 点维度 chunk size。只在单段点数过多时拆点，不代表 segment batch。

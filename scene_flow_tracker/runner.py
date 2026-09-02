@@ -29,7 +29,9 @@ def apply_cli_overrides(cfg: dict, args: argparse.Namespace) -> dict:
         cfg["workers"]["segment_decode_workers"] = 1
         cfg["workers"]["filter_workers"] = 1
         cfg["models"]["yolo"]["batch_size"] = 1
+        cfg["models"]["yolo"]["worker_count"] = 1
         cfg["models"]["cotracker"]["segment_batch_size"] = 1
+        cfg["models"]["cotracker"]["worker_count"] = 1
     return cfg
 
 

@@ -72,12 +72,13 @@ def assign_arm_slots(
 
 
 class YoloModel:
-    def __init__(self, cfg: dict[str, Any]) -> None:
+    def __init__(self, cfg: dict[str, Any], device: str | None = None, worker_id: int = 0) -> None:
         from ultralytics import YOLO
 
         ycfg = cfg["models"]["yolo"]
         self.model = YOLO(str(ycfg["model_path"]))
-        self.device = ycfg.get("device", "cuda:0")
+        self.device = str(device or ycfg.get("device", "cuda:0"))
+        self.worker_id = int(worker_id)
         self.imgsz = int(ycfg.get("imgsz", 640))
         self.conf = float(ycfg.get("conf", ycfg.get("confidence_threshold", 0.25)))
         self.iou = float(ycfg.get("iou", 0.7))
@@ -115,6 +116,7 @@ class YoloModel:
             left_box, left_conf, right_box, right_conf, method = assign_arm_slots(raw, w, h, self.names)
             timings = dict(item.timings)
             timings["yolo_time_sec"] = elapsed / max(1, len(items))
+            timings["yolo_worker_id"] = float(self.worker_id)
             results.append(
                 YoloDetectionResult(
                     job=item.job,

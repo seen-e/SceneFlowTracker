@@ -30,10 +30,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--segment-decode-workers", type=int, default=None, help="覆盖完整 segment 解码 worker 数。")
     parser.add_argument("--filter-workers", type=int, default=None, help="覆盖轨迹过滤 worker 数。")
     parser.add_argument("--yolo-batch-size", type=int, default=None, help="覆盖 YOLO 首帧 batch size。")
+    parser.add_argument("--yolo-worker-count", type=int, default=None, help="覆盖 YOLO 模型 worker 数量。")
+    parser.add_argument("--yolo-devices", default=None, help="覆盖 YOLO GPU 列表，逗号分隔，例如 cuda:0,cuda:1。")
     parser.add_argument("--cotracker-segment-batch-size", type=int, default=None, help="覆盖 CoTracker segment batch size。")
+    parser.add_argument("--cotracker-worker-count", type=int, default=None, help="覆盖 CoTracker 模型 worker 数量。")
+    parser.add_argument("--cotracker-devices", default=None, help="覆盖 CoTracker GPU 列表，逗号分隔，例如 cuda:0,cuda:1。")
     parser.add_argument("--total-query-points", type=int, default=None, help="覆盖每个 segment 固定 query 点总数。")
     parser.add_argument("--decode-workers", type=int, default=None, help="兼容旧参数：同时覆盖首帧解码和完整 segment 解码 worker 数。")
-    parser.add_argument("--model-workers", type=int, default=None, help="兼容旧参数：映射为 CoTracker segment batch size。")
+    parser.add_argument("--model-workers", type=int, default=None, help="兼容旧参数：映射为 CoTracker 模型 worker 数量。")
     parser.add_argument("--episode-index", type=int, default=None, help="只处理指定 episode_index。")
     parser.add_argument("--max-episodes", type=int, default=None, help="最多处理多少个 episode。")
     parser.add_argument("--segment-id", type=int, default=None, help="只处理指定 segment_id，通常用于 smoke test。")
@@ -62,15 +66,23 @@ def build_config(args: argparse.Namespace) -> dict:
         cfg["workers"]["filter_workers"] = args.filter_workers
     if args.yolo_batch_size is not None:
         cfg["models"]["yolo"]["batch_size"] = args.yolo_batch_size
+    if args.yolo_worker_count is not None:
+        cfg["models"]["yolo"]["worker_count"] = args.yolo_worker_count
+    if args.yolo_devices:
+        cfg["models"]["yolo"]["devices"] = [item.strip() for item in args.yolo_devices.split(",") if item.strip()]
     if args.cotracker_segment_batch_size is not None:
         cfg["models"]["cotracker"]["segment_batch_size"] = args.cotracker_segment_batch_size
+    if args.cotracker_worker_count is not None:
+        cfg["models"]["cotracker"]["worker_count"] = args.cotracker_worker_count
+    if args.cotracker_devices:
+        cfg["models"]["cotracker"]["devices"] = [item.strip() for item in args.cotracker_devices.split(",") if item.strip()]
     if args.total_query_points is not None:
         cfg["sampling"]["query_allocation"]["total_query_points"] = args.total_query_points
     if args.decode_workers is not None:
         cfg["workers"]["first_frame_decode_workers"] = args.decode_workers
         cfg["workers"]["segment_decode_workers"] = args.decode_workers
     if args.model_workers is not None:
-        cfg["models"]["cotracker"]["segment_batch_size"] = args.model_workers
+        cfg["models"]["cotracker"]["worker_count"] = args.model_workers
     if args.resume:
         cfg["batch"]["resume"] = True
     if args.no_resume:
@@ -82,7 +94,9 @@ def build_config(args: argparse.Namespace) -> dict:
         cfg["workers"]["segment_decode_workers"] = 1
         cfg["workers"]["filter_workers"] = 1
         cfg["models"]["yolo"]["batch_size"] = 1
+        cfg["models"]["yolo"]["worker_count"] = 1
         cfg["models"]["cotracker"]["segment_batch_size"] = 1
+        cfg["models"]["cotracker"]["worker_count"] = 1
     validate_config(cfg)
     return cfg
 

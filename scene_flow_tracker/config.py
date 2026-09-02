@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from .model_parallel import validate_model_parallel_config
+
 
 def deep_update(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
     out = dict(dst)
@@ -34,6 +36,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "yolo": {
             "model_path": "",
             "device": "cuda:0",
+            "devices": None,
+            "worker_count": 1,
             "batch_size": 32,
             "imgsz": 640,
             "conf": 0.25,
@@ -44,6 +48,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model_path": "",
             "window_len": 60,
             "device": "cuda:1",
+            "devices": None,
+            "worker_count": 1,
             "segment_batch_size": 4,
             "point_chunk_size": 1024,
         },
@@ -171,6 +177,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("sampling.query_allocation.points_per_detected_arm must be >= 0")
     if per_arm * 2 > total:
         raise ValueError("sampling.query_allocation.points_per_detected_arm * 2 must be <= total_query_points")
+    validate_model_parallel_config("yolo", cfg["models"]["yolo"], "cuda:0")
+    validate_model_parallel_config("cotracker", cfg["models"]["cotracker"], "cuda:0")
     for key, value in cfg["queues"].items():
         if int(value) <= 0:
             raise ValueError(f"queues.{key} must be > 0")

@@ -44,7 +44,7 @@ def normalize_cotracker_output(pred_tracks: Any, pred_visibility: Any, batch_siz
 
 
 class CoTrackerModel:
-    def __init__(self, cfg: dict[str, Any]) -> None:
+    def __init__(self, cfg: dict[str, Any], device: str | None = None, worker_id: int = 0) -> None:
         import torch
 
         ccfg = cfg["models"]["cotracker"]
@@ -57,7 +57,8 @@ class CoTrackerModel:
         from cotracker.predictor import CoTrackerPredictor
 
         self.torch = torch
-        self.device = self._resolve_device(str(ccfg.get("device", "cuda:0")))
+        self.device = self._resolve_device(str(device or ccfg.get("device", "cuda:0")))
+        self.worker_id = int(worker_id)
         self.point_chunk_size = int(ccfg.get("point_chunk_size", ccfg.get("point_batch_size", 1024)))
         self.model = CoTrackerPredictor(checkpoint=str(ccfg["model_path"])).to(self.device)
         self.model.eval()
@@ -117,6 +118,7 @@ class CoTrackerModel:
                 timings["cotracker_time_sec"] = elapsed / max(1, len(batch.items))
                 timings["cotracker_batch_size"] = float(batch.batch_size)
                 timings["cotracker_batch_fill_ratio"] = float(batch.fill_ratio)
+                timings["cotracker_worker_id"] = float(self.worker_id)
                 results.append(
                     TrackResult(
                         job=item.job,
