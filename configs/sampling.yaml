@@ -117,6 +117,10 @@ environment_sampling:
   # 环境采样时，在机械臂 bbox 外额外排除的 margin。
   robot_exclusion_margin_px: 0
 
+  # 环境候选点不足时，从已采到的环境点中重复采样补齐，并加入 [-repeat_jitter_px, repeat_jitter_px] 像素抖动。
+  # 这样可以保持固定点数，不会因为少量 segment 环境边缘不足而失败。
+  repeat_jitter_px: 1.0
+
   edge:
     min_component_pixels: 5
 

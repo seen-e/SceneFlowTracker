@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,6 +72,14 @@ def scan_completed_episode_views(output_root: Path, episodes: list[EpisodeJob], 
                 if require_summary and (not summary_path.exists() or summary_path.stat().st_size <= 0):
                     result.missing_summary_files += 1
                     continue
+                if require_summary:
+                    try:
+                        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        result.missing_summary_files += 1
+                        continue
+                    if int(summary.get("segments_failed", 0)) > 0:
+                        continue
                 result.completed.add(key)
     result.elapsed_sec = time.perf_counter() - started
     return result

@@ -22,6 +22,30 @@ def _grid_points(mask: np.ndarray, target: int) -> np.ndarray:
     return np.asarray(pts, dtype=np.float32).reshape(-1, 2)
 
 
+def _repeat_with_jitter(points: np.ndarray, target: int, width: int, height: int, rng: np.random.Generator, jitter_px: float) -> np.ndarray:
+    if len(points) <= 0 or len(points) >= target:
+        return points
+    needed = int(target) - len(points)
+    source_indices = rng.integers(0, len(points), size=needed)
+    repeated = points[source_indices].astype(np.float32, copy=True)
+    if jitter_px > 0:
+        jitter = rng.uniform(-jitter_px, jitter_px, size=repeated.shape).astype(np.float32)
+        repeated += jitter
+    repeated[:, 0] = np.clip(repeated[:, 0], 0, max(0, width - 1))
+    repeated[:, 1] = np.clip(repeated[:, 1], 0, max(0, height - 1))
+    return np.concatenate([points, repeated], axis=0)
+
+
+def _seed_points_for_repeat(points: np.ndarray, mask: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    if len(points) > 0:
+        return points.astype(np.float32)
+    ys, xs = np.nonzero(mask)
+    if len(xs) <= 0:
+        return np.empty((0, 2), np.float32)
+    idx = int(rng.integers(0, len(xs)))
+    return np.asarray([[xs[idx], ys[idx]]], dtype=np.float32)
+
+
 def sample_environment_points(
     image_rgb: np.ndarray,
     robot_bboxes: list[np.ndarray],
@@ -64,8 +88,10 @@ def sample_environment_points(
     score = edge_strength[ys, xs] + track[ys, xs] if len(xs) else np.empty((0,), np.float32)
     rng = np.random.default_rng(seed)
     picked = _spatial_pick(points, score, int(target), (h, w), cfg.get("spatial_sampling", {}), rng)
+    unique_sampled_count = int(len(picked))
     if excluded and len(picked):
         picked = np.asarray([p for p in picked if (int(round(float(p[0]))), int(round(float(p[1])))) not in excluded], dtype=np.float32).reshape(-1, 2)
+        unique_sampled_count = int(len(picked))
     used = set(excluded)
     used.update((int(round(x)), int(round(y))) for x, y in picked)
     if len(picked) < target:
@@ -103,10 +129,25 @@ def sample_environment_points(
                 break
         if extra:
             picked = np.concatenate([picked, np.asarray(extra, dtype=np.float32)], axis=0)
+    repeat_padding_count = 0
+    repeat_jitter_px = float(cfg.get("repeat_jitter_px", 1.0))
+    unique_sampled_count = int(min(len(picked), target))
     if len(picked) < target:
-        raise RuntimeError("INSUFFICIENT_UNIQUE_QUERY_POINTS")
+        unique_sampled_count = int(len(picked))
+        seed_points = _seed_points_for_repeat(picked, fallback_valid if used_edge_constraint else content_valid, rng)
+        if len(seed_points) <= 0:
+            seed_points = _seed_points_for_repeat(points, content_valid, rng)
+        if len(seed_points) <= 0:
+            seed_points = np.asarray([[(valid_bbox[0] + valid_bbox[2]) * 0.5, (valid_bbox[1] + valid_bbox[3]) * 0.5]], dtype=np.float32)
+        before = len(seed_points)
+        unique_sampled_count = max(unique_sampled_count, int(before))
+        picked = _repeat_with_jitter(seed_points.astype(np.float32), int(target), w, h, rng, repeat_jitter_px)
+        repeat_padding_count = int(len(picked) - before)
+        constraint_fallback_level = "repeat_jitter"
     picked = picked[:target].astype(np.float32)
     pix = np.round(picked).astype(int)
+    pix[:, 0] = np.clip(pix[:, 0], 0, max(0, w - 1))
+    pix[:, 1] = np.clip(pix[:, 1], 0, max(0, h - 1))
     features = {
         "edge_strength": edge_strength[pix[:, 1], pix[:, 0]].astype(np.float32),
         "trackability_score": track[pix[:, 1], pix[:, 0]].astype(np.float32),
@@ -118,6 +159,9 @@ def sample_environment_points(
         "stats": {
             "target_points": int(target),
             "final_sampled_count": int(len(picked)),
+            "unique_sampled_count": int(unique_sampled_count),
+            "repeat_padding_count": int(repeat_padding_count),
+            "repeat_jitter_px": float(repeat_jitter_px),
             "candidate_count": int(len(points)),
             "valid_region_bbox_xyxy": [int(v) for v in valid_bbox],
             "edge_constraint_used": bool(used_edge_constraint),
