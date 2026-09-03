@@ -53,6 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "workers": {
+        "resume_scan_workers": 16,
         "first_frame_decode_workers": 8,
         "sampling_workers": 8,
         "segment_decode_workers": 4,
@@ -161,7 +162,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("video.fps_mode must be manifest or fixed")
     if cfg["video"]["tail_policy"] not in {"keep", "drop"}:
         raise ValueError("video.tail_policy must be keep or drop")
-    for key in ("first_frame_decode_workers", "sampling_workers", "segment_decode_workers", "filter_workers"):
+    for key in ("resume_scan_workers", "first_frame_decode_workers", "sampling_workers", "segment_decode_workers", "filter_workers"):
         if int(cfg["workers"][key]) < 1:
             raise ValueError(f"workers.{key} must be >= 1")
     if int((cfg.get("pipeline", {}) or {}).get("max_inflight_segments", 64)) < 1:

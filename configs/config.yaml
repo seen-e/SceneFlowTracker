@@ -30,6 +30,9 @@ video:
   tail_policy: keep
 
 workers:
+  # 断点续跑扫描线程数；只扫描 output_root 下已经存在的结果，并并发检查 summary 是否成功完成。
+  resume_scan_workers: 16
+
   # 首帧解码并发数；只读取每个 segment 第一帧，供 YOLO 和采样使用。
   first_frame_decode_workers: 8
 

@@ -159,6 +159,7 @@ video:
 
 ```yaml
 workers:
+  resume_scan_workers: 16
   first_frame_decode_workers: 8
   sampling_workers: 8
   segment_decode_workers: 4
@@ -167,12 +168,13 @@ workers:
 
 | 参数 | 说明 |
 | --- | --- |
+| `resume_scan_workers` | 断点续跑扫描线程数。只扫描 `output_root` 下已经存在的结果，并并发检查 `*_summary.json` 是否为成功结果。 |
 | `first_frame_decode_workers` | 首帧解码并发数。只读取每个 segment 的起始帧，用于 YOLO 和采样。 |
 | `sampling_workers` | 采样并发数。根据 YOLO bbox、边缘、颜色先验和可追踪性生成 query 点。 |
 | `segment_decode_workers` | 完整 segment 解码并发数。采样成功后才读取整段视频，避免无效内存占用。 |
 | `filter_workers` | 轨迹过滤并发数。负责平滑、运动状态分类、jitter 过滤和 usable 标记。 |
 
-这些 worker 是 CPU 侧并发。YOLO 和 CoTracker 还有独立的模型 worker 配置，分别由 `models.yolo.worker_count` 和 `models.cotracker.worker_count` 控制。`devices` 中只写 GPU 编号，例如 `[0, 1]`；代码内部会转成 `cuda:0/cuda:1`。模型 worker 会均匀轮转分配到对应的 `devices` 列表上，并且框架要求 `worker_count % len(devices) == 0`，避免某张 GPU 分到更多模型实例。
+这些 worker 是 CPU 侧并发。`resume_scan_workers` 只在启动时用于扫描已有结果；其他 worker 负责运行时的数据准备和后处理。YOLO 和 CoTracker 还有独立的模型 worker 配置，分别由 `models.yolo.worker_count` 和 `models.cotracker.worker_count` 控制。`devices` 中只写 GPU 编号，例如 `[0, 1]`；代码内部会转成 `cuda:0/cuda:1`。模型 worker 会均匀轮转分配到对应的 `devices` 列表上，并且框架要求 `worker_count % len(devices) == 0`，避免某张 GPU 分到更多模型实例。
 
 每个模型 worker 内部仍然保持原来的两阶段结构：
 

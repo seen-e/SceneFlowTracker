@@ -360,7 +360,8 @@ def run(cfg: dict[str, Any], episode_index: int | None = None, max_episodes: int
     skipped: list[EpisodeJob] = []
     manifest_path = output_root / "processing_manifest.jsonl"
     if cfg["batch"].get("resume", True) and segment_id is None:
-        scan = scan_completed_episode_views(output_root, episodes)
+        scan_workers = int(cfg["workers"].get("resume_scan_workers", 1))
+        scan = scan_completed_episode_views(output_root, episodes, workers=scan_workers)
         skipped = [ep for ep in episodes if scan.is_completed(ep)]
         episodes = [ep for ep in episodes if ep not in skipped]
         if skipped and bool((cfg.get("processing_manifest", {}) or {}).get("write_resume_skip_records", False)):
@@ -377,7 +378,15 @@ def run(cfg: dict[str, Any], episode_index: int | None = None, max_episodes: int
                     for ep in skipped
                 ],
             )
-        logging.info("resume scan skipped=%d remaining=%d elapsed=%.2fs", len(skipped), len(episodes), scan.elapsed_sec)
+        logging.info(
+            "resume scan skipped=%d remaining=%d existing_dirs=%d checked_outputs=%d workers=%d elapsed=%.2fs",
+            len(skipped),
+            len(episodes),
+            scan.selected_existing_dirs,
+            scan.checked_view_outputs,
+            scan_workers,
+            scan.elapsed_sec,
+        )
     total_segments = sum(len(_planned_segments(ep, cfg, segment_id)) for ep in episodes)
     append_processing_manifest(
         manifest_path,
